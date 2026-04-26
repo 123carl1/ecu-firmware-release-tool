@@ -388,6 +388,7 @@ $env:PYTHONPATH="src"; $env:QT_QPA_PLATFORM="offscreen"; python -m unified_can_l
 3. 如果 UI 直接调用刷写流程，会阻塞界面；必须用 Worker。
 4. 如果 Fake 后端与真实后端接口不一致，后续接硬件会返工；因此 Alpha 也要走后端接口。
 5. 真实硬件未验证前，界面只能声明 Fake 演示通过，不能声明真实刷写可用。
+6. 接入 TSMaster/USB2XXX 前必须补真实硬件阻塞调用的协作式取消，或在刷写/诊断运行中关闭窗口时弹出确认；当前 `quit()` + `wait()` 只作为 Fake Alpha 的线程收尾保护。
 
 ## 结论
 

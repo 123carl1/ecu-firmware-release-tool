@@ -274,11 +274,13 @@ class MainWindow(QMainWindow):
             self._show_error("UDS Payload 格式错误")
             return
         self.uds_send_button.setEnabled(False)
+        self.flash_start_button.setEnabled(False)
         worker = UdsWorker(self._session, payload, log_dir=Path("logs"))
         worker.event.connect(self._on_worker_event)
         worker.result.connect(self._on_uds_response)
         worker.failed.connect(self._show_error)
         worker.finished.connect(lambda: self.uds_send_button.setEnabled(True))
+        worker.finished.connect(lambda: self.flash_start_button.setEnabled(self._session is not None))
         self._start_worker(worker)
 
     def _on_uds_response(self, payload: bytes) -> None:
