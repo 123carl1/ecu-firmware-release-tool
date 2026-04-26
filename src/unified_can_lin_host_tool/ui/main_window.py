@@ -220,6 +220,14 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _stop_active_threads(self) -> None:
+        for worker in list(self._active_workers):
+            cancel = getattr(worker, "cancel", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except RuntimeError:
+                    continue
+
         threads = list(self._active_threads)
         running_threads: list[QThread] = []
         for thread in threads:

@@ -99,6 +99,34 @@ class UiThreadingTest(unittest.TestCase):
 
         self.assertEqual(window._active_threads, [])
 
+    def test_main_window_close_requests_cancel_for_active_workers(self):
+        try:
+            from PySide6.QtCore import QObject
+            from PySide6.QtWidgets import QApplication
+        except ModuleNotFoundError:
+            self.skipTest("PySide6 is not installed")
+
+        from unified_can_lin_host_tool.ui.main_window import MainWindow
+
+        class FakeCancelableWorker(QObject):
+            def __init__(self):
+                super().__init__()
+                self.cancel_called = False
+
+            def cancel(self):
+                self.cancel_called = True
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        worker = FakeCancelableWorker()
+        window._active_workers.append(worker)
+
+        window._stop_active_threads()
+        app.processEvents()
+
+        self.assertTrue(worker.cancel_called)
+        window.close()
+
     def test_main_window_disables_flash_while_uds_worker_is_running(self):
         try:
             from PySide6.QtCore import QEventLoop, QTimer
