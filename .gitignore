@@ -20,6 +20,7 @@ dist/
 # Runtime data
 logs/
 artifacts/
+.worktrees/
 
 # Local configuration
 .env
@@ -31,4 +32,3 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
-
