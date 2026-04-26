@@ -50,19 +50,26 @@ class ConnectWorker(QObject):
 
 
 class UdsWorker(QObject):
+    event = Signal(object)
     result = Signal(object)
     failed = Signal(str)
     finished = Signal()
 
-    def __init__(self, session: FakeHostSession, payload: bytes) -> None:
+    def __init__(self, session: FakeHostSession, payload: bytes, *, log_dir: Path = Path("logs")) -> None:
         super().__init__()
         self._session = session
         self._payload = payload
+        self._log_dir = log_dir
 
     @Slot()
     def run(self) -> None:
         try:
-            self.result.emit(self._session.request_uds(self._payload))
+            response = self._session.request_uds(
+                self._payload,
+                log_dir=self._log_dir,
+                on_event=self.event.emit,
+            )
+            self.result.emit(response)
         except Exception as exc:
             self.failed.emit(str(exc))
         finally:

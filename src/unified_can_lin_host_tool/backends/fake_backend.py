@@ -18,30 +18,49 @@ EventCallback = Callable[[WorkerEvent], None]
 
 
 class TraceEventBridge:
-    def __init__(self, logger: TraceLogger, emit: EventCallback) -> None:
+    def __init__(self, logger: TraceLogger | None, emit: EventCallback | None) -> None:
         self._logger = logger
         self._emit = emit
 
     def write(self, event: TraceEvent) -> None:
-        self._logger.write(event)
-        self._emit(WorkerEvent(kind="trace", message="LIN frame", trace=event))
+        if self._logger is not None:
+            self._logger.write(event)
+        if self._emit is not None:
+            self._emit(WorkerEvent(kind="trace", message="LIN frame", trace=event))
 
 
 class FakeHostSession:
     def __init__(self, profile: ToolProfile) -> None:
         self.profile = profile
+        self.bus_session = BusSession()
         self.adapter = FakeLinAdapter()
         self.transport = LinDiagTransport(self.adapter, profile)
 
-    def request_uds(self, payload: bytes) -> bytes:
-        response_payload = _manual_uds_response(payload)
-        self.adapter = FakeLinAdapter(
-            responses=[
-                (self.profile.bus.response_id, _lin_single(self.profile.bus.nad, response_payload)),
-            ]
-        )
-        self.transport = LinDiagTransport(self.adapter, self.profile)
-        return self.transport.request(payload).payload
+    def request_uds(
+        self,
+        payload: bytes,
+        *,
+        log_dir: Path | None = None,
+        on_event: EventCallback | None = None,
+    ) -> bytes:
+        if not self.bus_session.enter_diag_exclusive("uds"):
+            raise HostToolError(ErrorCategory.TRANSPORT, "LIN channel is busy")
+
+        trace_logger = TraceLogger(log_dir) if log_dir is not None else None
+        try:
+            response_payload = _manual_uds_response(payload)
+            self.adapter = FakeLinAdapter(
+                responses=[
+                    (self.profile.bus.response_id, _lin_single(self.profile.bus.nad, response_payload)),
+                ]
+            )
+            trace_bridge = TraceEventBridge(trace_logger, on_event) if trace_logger is not None or on_event is not None else None
+            self.transport = LinDiagTransport(self.adapter, self.profile, trace_logger=trace_bridge)
+            return self.transport.request(payload).payload
+        finally:
+            if trace_logger is not None:
+                trace_logger.close()
+            self.bus_session.release_diag_exclusive("uds")
 
     def flash_e68(
         self,
@@ -81,7 +100,7 @@ class FakeHostSession:
             )
             bridge = TraceEventBridge(trace_logger, emit)
             transport = LinDiagTransport(adapter, self.profile, sleep_func=lambda _: None, trace_logger=bridge)
-            workflow = FlashWorkflow(self.profile, transport, BusSession())
+            workflow = FlashWorkflow(self.profile, transport, self.bus_session)
 
             message = "Fake flash workflow running" if dry_run else "Fake flash workflow running without hardware"
             emit(WorkerEvent(kind="progress", message=message, progress=20))

@@ -25,3 +25,12 @@ class TraceTests(unittest.TestCase):
             self.assertIn("0x3C", text)
             self.assertIn("02 02 10 01", text)
 
+    def test_trace_logger_uses_unique_paths_within_same_second(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = TraceLogger(Path(tmp))
+            second = TraceLogger(Path(tmp))
+            try:
+                self.assertNotEqual(first.path, second.path)
+            finally:
+                first.close()
+                second.close()

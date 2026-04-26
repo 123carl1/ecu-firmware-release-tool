@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Qt
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -196,6 +197,20 @@ class MainWindow(QMainWindow):
         thread.finished.connect(lambda thread=thread: self._remove_thread(thread))
         thread.start()
 
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._stop_active_threads()
+        super().closeEvent(event)
+
+    def _stop_active_threads(self) -> None:
+        threads = list(self._active_threads)
+        for thread in threads:
+            thread.requestInterruption()
+            thread.quit()
+        for thread in threads:
+            thread.wait(2000)
+        self._active_threads.clear()
+        self._active_workers.clear()
+
     def _remove_worker(self, worker: QObject) -> None:
         if worker in self._active_workers:
             self._active_workers.remove(worker)
@@ -259,7 +274,8 @@ class MainWindow(QMainWindow):
             self._show_error("UDS Payload 格式错误")
             return
         self.uds_send_button.setEnabled(False)
-        worker = UdsWorker(self._session, payload)
+        worker = UdsWorker(self._session, payload, log_dir=Path("logs"))
+        worker.event.connect(self._on_worker_event)
         worker.result.connect(self._on_uds_response)
         worker.failed.connect(self._show_error)
         worker.finished.connect(lambda: self.uds_send_button.setEnabled(True))
