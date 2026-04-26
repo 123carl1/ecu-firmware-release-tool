@@ -17,7 +17,10 @@ M2A 不包含真实同星 TSMaster 或图莫斯 USB2XXX 硬件验证。
 7. `FlashWorkflow` 在安全点支持取消，并释放 `DIAG_EXCLUSIVE`。
 8. 用户主动取消和关闭窗口触发取消时，UI 显示“已取消”，不显示为 `ERROR`。
 9. 关闭窗口时会先请求后台 Worker 取消，再进行线程收尾。
-10. 缺 DLL/缺设备类错误能按分类显示，不崩溃。
+10. UDS/刷写运行中会禁用后端切换、扫描和连接，避免旧 session 被 UI 线程关闭。
+11. 后台线程等待超时后不会无条件丢弃仍在运行的线程/Worker 引用。
+12. Fake 后端已取消请求优先抛出 `OperationCancelled`，不会被 unsupported UDS 或缺文件错误覆盖。
+13. 缺 DLL/缺设备类错误能按分类显示，不崩溃。
 
 ## 自动化验证
 
@@ -37,7 +40,7 @@ $env:PYTHONPATH="src"; $env:QT_QPA_PLATFORM="offscreen"; python -m unittest disc
 结果：
 
 ```text
-Ran 56 tests in 1.384s
+Ran 59 tests in 1.407s
 OK
 ```
 
