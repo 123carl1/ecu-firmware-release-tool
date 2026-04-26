@@ -76,16 +76,60 @@
    - `UdsClient`：封装 UDS 请求响应。
    - `FlashWorkflow`：执行 E68 LIN 刷写状态机。
    - `TraceLogger`：统一记录 UI 日志和文件日志。
+   - `WorkerController`：管理扫描、接收轮询、UDS 和刷写任务的后台线程生命周期。
 
 3. 总线抽象层
-   - `BusAdapter` 接口：枚举设备、打开通道、关闭通道、发送帧、接收帧。
+   - `BusAdapter` 接口：枚举设备、打开通道、关闭通道、发送底层帧、接收底层帧。
    - `LinChannel` / `CanChannel` 通道模型。
    - `BusFrame` 统一帧模型。
+   - `LinDiagTransport`：封装 LIN 诊断 `0x3C/0x3D` 的请求组帧、连续帧发送和响应轮询。
+   - `CanUdsTransport`：预留 CAN UDS 传输层，不在第一版实现完整 CAN 刷写。
 
 4. 厂家适配层
    - `Usb2xxxAdapter`：封装 `USB2XXX.dll`。
    - `TsmasterAdapter`：封装 `TSMaster.dll`。
    - 厂家 DLL 路径和默认参数来自配置，不写死在业务流程里。
+
+## 线程模型
+
+PySide6 UI 线程只负责渲染、收集用户操作和接收事件，不允许直接执行可能阻塞的硬件操作或刷写流程。
+
+后台任务必须放入 Worker 线程：
+
+1. 设备扫描
+   - 加载 DLL、枚举 USB 工具、读取设备信息都在扫描 Worker 中执行。
+   - UI 线程只发起扫描请求，并接收 `device_scan_started`、`device_found`、`device_scan_finished`、`device_scan_failed` 事件。
+
+2. 连接和接收轮询
+   - 打开通道、配置波特率、启动 LIN/CAN 通道在连接 Worker 中执行。
+   - 连接成功后由接收 Worker 持续轮询当前活动通道。
+   - 接收 Worker 将原始帧、错误和状态变化通过 Qt signal 或线程安全队列送回 UI。
+
+3. UDS 请求
+   - 手动 UDS 请求在 UDS Worker 中执行。
+   - UI 只提交请求参数，并接收请求开始、TX/RX、解析结果、超时或失败事件。
+   - 同一时间只允许一个 UDS 请求占用当前活动通道，避免和刷写流程抢占 `0x3D` 响应。
+
+4. 刷写流程
+   - `FlashWorkflow` 必须运行在刷写 Worker 中。
+   - UI 只接收阶段、进度、TX/RX、错误、完成、取消结果。
+   - 刷写进行中禁止手动收发和手动 UDS 操作，除非先请求取消并等待 Worker 进入安全停止点。
+
+5. 日志
+   - Worker 产生结构化事件。
+   - `TraceLogger` 负责把事件写入文件并转发给 UI。
+   - UI 不直接从硬件线程读取状态。
+
+取消策略：
+
+1. UI 可以请求取消扫描、手动 UDS 和刷写。
+2. 取消不是强杀线程，而是设置取消标志。
+3. 刷写 Worker 只能在安全停止点退出：
+   - UDS 请求完成后。
+   - 当前 `$36` 块收到响应后。
+   - `$31 FF00` 擦除完成或超时后。
+4. 已进入 App 擦除或 App 下载阶段时，取消后 UI 必须显示“ECU 可能停留在 Boot，需要重新刷写或重新上电后恢复”，不能提示已恢复到 App。
+5. Worker 异常退出时必须关闭当前通道或标记通道不可用，并写入日志。
 
 ## 建议目录结构
 
@@ -102,6 +146,7 @@ host_tool/
     firmware_image.py
     trace_logger.py
     errors.py
+    workers.py
   bus/
     models.py
     session.py
@@ -127,6 +172,78 @@ host_tool/
   logs/
   tests/
 ```
+
+## LIN 诊断传输抽象
+
+`BusAdapter.send_frame()` / `receive_frame()` 只能表示底层原始帧能力，不能直接承载 E68 LIN UDS 刷写语义。LIN 诊断必须通过独立的 `LinDiagTransport`。
+
+`LinDiagTransport` 的职责：
+
+1. 根据 Profile 读取 LIN 诊断参数：
+   - NAD：`0x02`
+   - 请求 ID：`0x3C`
+   - 响应 ID：`0x3D`
+   - 校验和：诊断帧使用 Classic checksum
+   - poll timeout
+   - poll gap
+   - frame gap
+   - P2/P2*
+
+2. 请求组帧：
+   - 单帧：`[NAD] [PCI=len] [UDS...] [0xFF padding]`
+   - 首帧：`[NAD] [0x10 | lenHigh] [lenLow] [UDS 前 5 字节]`
+   - 连续帧：`[NAD] [0x20 | SN] [后续最多 6 字节] [0xFF padding]`
+   - 连续帧 SN 从 1 开始，低 4 位递增。
+
+3. 请求发送：
+   - 通过底层适配器发送 `0x3C` LIN 数据帧。
+   - 每帧间隔使用 Profile 的 `frame_gap_ms`。
+   - 发送过程产生日志事件：`LIN_DIAG_TX_FRAME`。
+
+4. 响应轮询：
+   - 主机调度 `0x3D` 响应帧。
+   - 轮询直到收到匹配 NAD 和有效 PCI 的响应，或超时。
+   - 当前 Boot/App 响应均为单帧，UDS 响应载荷最大 6 字节。
+   - 必须支持 `0x7F <sid> 0x78`：返回给上层作为 ResponsePending，而不是普通失败。
+   - 轮询过程产生日志事件：`LIN_DIAG_RX_FRAME`、`LIN_DIAG_TIMEOUT`。
+
+5. 响应解析：
+   - 校验 NAD。
+   - 校验 PCI 长度。
+   - 提取 UDS payload。
+   - 识别正响应、负响应和 ResponsePending。
+
+6. 互斥：
+   - 同一活动通道同一时间只能有一个 `LinDiagTransport.request()` 在执行。
+   - 刷写流程占用该传输层期间，UI 手动 UDS 和手动 LIN 诊断发送必须禁用。
+
+建议接口：
+
+```python
+class LinDiagTransport:
+    def request(
+        self,
+        uds_payload: bytes,
+        *,
+        expect_sid: int | None = None,
+        expect_prefix: bytes | None = None,
+        timeout_ms: int | None = None,
+        allow_response_pending: bool = False,
+        cancel_token: CancelToken | None = None,
+    ) -> UdsResponse:
+        ...
+```
+
+底层适配器只需要提供两类 LIN 原语：
+
+1. 发送请求帧到指定 ID。
+2. 调度并读取指定响应 ID。
+
+厂家差异由适配器内部处理：
+
+1. USB2XXX 可以优先使用官方 `LIN_UDS_Request` / `LIN_UDS_Response`，但仍要把 TX/RX 和超时转换成统一事件。
+2. TSMaster 使用主机发送 `0x3C`，再 `transmit_header_and_receive_msg` 轮询 `0x3D`。
+3. 如果厂家 SDK 自动处理 checksum，适配器仍必须在日志里标记使用的是 Classic checksum 诊断帧。
 
 ## Profile 设计
 
@@ -156,6 +273,9 @@ uds:
   p2_star_ms: 5000
   max_transfer_payload: 6
   request_download_format: 0x44
+  frame_gap_ms: 12
+  poll_timeout_ms: 300
+  poll_gap_ms: 20
 
 seedkey:
   app_level1: e68_level1
@@ -332,6 +452,46 @@ logs/2026-04-26/195000_e68_lin_bootloader_usb2xxx_lin1.log
 8. App 擦除长度必须按 512B 页对齐。
 9. App 下载长度可以非 4 字节整数，Boot 写入层最终用 `0xFF` 补齐最后不足 4 字节的数据。
 
+## CRC32 口径
+
+E68 LIN Bootloader 的 `$37` CRC32 必须逐字节复刻固件 `BootCrc32_Update()`，不能直接使用 Python `zlib.crc32()` 的默认口径。
+
+源码依据：
+
+1. 初值：`BOOT_CRC32_INIT_VALUE = 0xFFFFFFFF`
+2. 更新公式：
+
+```c
+currentCrc = ((currentCrc >> 8U) & 0x00FFFFFFUL) ^
+             table[(currentCrc ^ byte) & 0xFFUL];
+```
+
+3. 未看到 final xor，所以上位机发送 `$37` 时使用累加后的当前 CRC 值，不再异或 `0xFFFFFFFF`。
+4. 覆盖范围：仅覆盖所有 `$36` 的数据区，不包含 SID `0x36`、块序号、NAD、PCI、LIN checksum。
+5. 每个逻辑下载块单独计算：
+   - FlashDriver 下载：从 `0xFFFFFFFF` 开始，覆盖 FlashDriver 镜像数据。
+   - App 下载：重新从 `0xFFFFFFFF` 开始，覆盖 App 镜像数据。
+6. `$37` 请求格式：`37 + crc32_be`，CRC32 使用大端字节序发送。
+7. Boot 正响应：`77 + crc32_be`，上位机必须校验返回 CRC 与本地计算一致。
+
+Python 端建议实现：
+
+```python
+def e68_boot_crc32_update(current_crc: int, data: bytes) -> int:
+    crc = current_crc & 0xFFFFFFFF
+    for value in data:
+        crc = ((crc >> 8) & 0x00FFFFFF) ^ TABLE[(crc ^ value) & 0xFF]
+        crc &= 0xFFFFFFFF
+    return crc
+```
+
+必须加入的测试向量：
+
+1. 数据 `b"123456789"` 从 `0xFFFFFFFF` 开始计算，结果必须为 `0x340BC6D9`。
+2. 分段计算结果必须等于一次性计算结果。
+3. 发送 `$37` 时不做 final xor。
+4. CRC 只包含 `$36` 数据区，加入块序号时结果应不同，用于防误用测试。
+
 ## Seed/Key 算法
 
 第一版实现两个内置 Provider：
@@ -408,6 +568,94 @@ NRC 显示必须包含含义：
 0x78 响应挂起
 ```
 
+## 刷写失败恢复策略
+
+刷写失败后的 UI 不能只停在错误弹窗，必须给出下一步动作。恢复策略由失败阶段决定。
+
+恢复状态分级：
+
+1. `SAFE_IN_APP`
+   - 失败发生在 App 预编程阶段，例如 `$10 01`、`$10 03`、`$27 01/02`、`$31 01 02 03`。
+   - App 仍在运行，未写 Boot 请求标志，未擦除 App。
+   - UI 允许直接重试预编程或退出。
+
+2. `BOOT_NOT_ERASED`
+   - 已通过 `$10 02` 进入 Boot，但尚未执行 App 擦除。
+   - 可能已完成 Boot 编程会话、FBL 解锁或 FlashDriver 下载。
+   - UI 允许重新执行 Boot 阶段流程。
+   - 若 FlashDriver 已校验通过，允许从 App 擦除前继续；但第一版建议为了确定性，失败后默认重新下载并校验 FlashDriver。
+
+3. `BOOT_APP_INVALID_OR_UNKNOWN`
+   - 已发送 `$31 01 FF 00`，或 App 下载已经开始。
+   - Boot 会先擦除 App 有效标志；此后失败、电源中断或取消都不能假设 App 可启动。
+   - UI 必须提示“ECU 可能停留在 Boot，需重新刷写完整 App”。
+   - UI 允许重新执行 Boot 编程会话、FBL 解锁、FlashDriver 下载、擦除、App 下载全流程。
+   - 不允许提示“进入 App”或“刷写完成”。
+
+4. `BOOT_APP_READY_RESET_PENDING`
+   - `$31 01 FF 01` 已返回通过，但 `$11 01` 失败或复位后仍停留 Boot。
+   - UI 应提供两个动作：
+     - 重发 `$11 01`。
+     - 如果重发失败，提示手动重新上电后再读 App 版本或观察业务帧。
+   - 若重新上电后仍停 Boot，允许重新执行完整刷写流程。
+
+5. `TRANSPORT_UNKNOWN`
+   - DLL 崩溃、通道断开、LIN 长时间无响应、Worker 异常退出。
+   - UI 必须关闭当前 BusSession 或标记通道不可用。
+   - 用户需要重新扫描/连接。
+   - 若失败发生在 App 擦除后，按 `BOOT_APP_INVALID_OR_UNKNOWN` 提示。
+
+典型失败处理：
+
+1. App 预编程检查失败
+   - 显示检查结果和 NRC。
+   - 允许直接重试 `$31 01 02 03` 或从 `$10 01` 重新开始。
+
+2. `$10 02` 后等不到 Boot
+   - 提示可能仍在 App、复位中、LIN 物理层异常或 Boot 未启动。
+   - 允许重新轮询 Boot `$10 02`。
+   - 允许重新上电后再扫描/连接。
+
+3. FlashDriver 下载 `$37` CRC 失败
+   - 当前 FlashDriver 逻辑块无效。
+   - UI 必须重新发起 FlashDriver `$34/$36/$37`，不能直接进入 `$31 01 02 02`。
+
+4. FlashDriver 检查失败
+   - UI 必须重新下载 FlashDriver。
+   - 若连续失败，提示检查 FlashDriver 文件、ABI、函数表和目标 RAM 地址。
+
+5. App 擦除返回 `0x78` 后超时
+   - App 有效标志可能已经被清除，App 区擦除状态未知。
+   - UI 标记为 `BOOT_APP_INVALID_OR_UNKNOWN`。
+   - 下一次只能走完整 Boot 刷写恢复流程。
+
+6. App 下载 `$36` 中途失败或取消
+   - App 镜像不完整。
+   - UI 标记为 `BOOT_APP_INVALID_OR_UNKNOWN`。
+   - 下一次必须重新擦除并重新下载 App。
+
+7. App `$37` CRC 失败
+   - Boot 会中止当前下载状态，App 有效标志不应被置位。
+   - UI 标记为 `BOOT_APP_INVALID_OR_UNKNOWN`。
+   - 下一次必须重新擦除并重新下载 App。
+
+8. App 完整性检查失败
+   - 可能是镜像地址、向量表、文件内容或下载数据错误。
+   - UI 标记为 `BOOT_APP_INVALID_OR_UNKNOWN`。
+   - 禁止发送 `$11 01` 作为进入 App 的动作。
+
+9. `$11 01` 后未确认进入 App
+   - 如果已收到 `$51 01`，先提示复位可能已发生，允许重新连接后读版本。
+   - 若读 App 版本失败且 Boot 仍响应，标记为 `BOOT_APP_READY_RESET_PENDING` 或重新刷写。
+
+恢复动作在 UI 上必须是明确按钮或菜单项：
+
+1. `重试当前步骤`
+2. `从 Boot 阶段重新刷写`
+3. `重新扫描并连接`
+4. `重新上电后继续`
+5. `保存日志并停止`
+
 ## 验证策略
 
 第一版实现必须先通过纯逻辑测试和模拟总线测试，再做硬件验证。
@@ -423,6 +671,8 @@ NRC 显示必须包含含义：
 7. Boot FBL Seed/Key。
 8. NRC 解析。
 9. Profile 校验。
+10. 刷写失败恢复状态映射。
+11. 取消请求只能在安全停止点生效。
 
 模拟总线测试：
 
@@ -434,6 +684,10 @@ NRC 显示必须包含含义：
 6. `$31 FF00` 返回 `0x78` 后最终超时。
 7. `$36` 块序号错误。
 8. LIN 响应超时。
+9. App 擦除后断连，再次启动应提示完整 Boot 恢复。
+10. App `$37` CRC 失败后禁止 `$11 01`。
+11. `$11 01` 收到正响应但读 App 版本失败时进入复位待确认状态。
+12. 刷写 Worker 取消请求在 `$36` 块响应后退出。
 
 硬件验证：
 
@@ -460,4 +714,5 @@ NRC 显示必须包含含义：
 9. 所有 TX/RX 和 UDS 步骤实时显示并自动保存日志。
 10. 纯逻辑测试和模拟总线测试通过。
 11. 至少完成一次图莫斯或同星硬件完整刷写验证。
-
+12. 扫描、接收轮询、UDS 和刷写期间 UI 不冻结，取消请求能在定义的安全停止点生效。
+13. E68 LIN 刷写只能通过 `LinDiagTransport` 执行，不允许直接用普通 `BusAdapter.send/receive` 拼刷写流程。
