@@ -80,6 +80,7 @@ class BootDelayedTransport:
         expect_prefix=None,
         timeout_ms=None,
         allow_response_pending=False,
+        cancel_token=None,
     ):
         self.requests.append(uds_payload)
 

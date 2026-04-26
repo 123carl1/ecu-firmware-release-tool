@@ -58,7 +58,7 @@ class FakeHostSession:
             )
             trace_bridge = TraceEventBridge(trace_logger, on_event) if trace_logger is not None or on_event is not None else None
             self.transport = LinDiagTransport(self.adapter, self.profile, trace_logger=trace_bridge)
-            return self.transport.request(payload).payload
+            return self.transport.request(payload, cancel_token=cancel_token).payload
         finally:
             if trace_logger is not None:
                 trace_logger.close()
@@ -107,7 +107,7 @@ class FakeHostSession:
 
             message = "Fake flash workflow running" if dry_run else "Fake flash workflow running without hardware"
             emit(WorkerEvent(kind="progress", message=message, progress=20))
-            result = workflow.run(flash_driver=flash_driver, app=app)
+            result = workflow.run(flash_driver=flash_driver, app=app, cancel_token=cancel_token)
             if result.success:
                 emit(WorkerEvent(kind="progress", message="Flash workflow completed", progress=100))
                 emit(WorkerEvent(kind="result", message="FLASH SUCCESS", progress=100))
