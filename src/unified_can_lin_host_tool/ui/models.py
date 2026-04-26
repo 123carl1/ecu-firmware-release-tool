@@ -22,6 +22,8 @@ class UiChannel:
     channel_name: str
     bus: str
     channel_index: int
+    mapping: dict[str, str | int | float | bool] = field(default_factory=dict)
+    capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

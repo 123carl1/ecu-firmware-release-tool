@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from unified_can_lin_host_tool.adapters.fake import FakeLinAdapter
+from unified_can_lin_host_tool.core.cancel import CancellationToken
 from unified_can_lin_host_tool.core.events import TraceEvent
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.core.session import BusSession
@@ -42,6 +43,7 @@ class FakeHostSession:
         *,
         log_dir: Path | None = None,
         on_event: EventCallback | None = None,
+        cancel_token: CancellationToken | None = None,
     ) -> bytes:
         if not self.bus_session.enter_diag_exclusive("uds"):
             raise HostToolError(ErrorCategory.TRANSPORT, "LIN channel is busy")
@@ -70,6 +72,7 @@ class FakeHostSession:
         log_dir: Path,
         dry_run: bool = True,
         on_event: EventCallback | None = None,
+        cancel_token: CancellationToken | None = None,
     ) -> list[WorkerEvent]:
         events: list[WorkerEvent] = []
 
@@ -112,8 +115,13 @@ class FakeHostSession:
         finally:
             trace_logger.close()
 
+    def close(self) -> None:
+        pass
+
 
 class FakeHostBackend:
+    name = "Fake"
+
     def scan(self) -> list[UiDevice]:
         return [
             UiDevice(
@@ -127,6 +135,13 @@ class FakeHostBackend:
                         channel_name="LIN 0",
                         bus="LIN",
                         channel_index=0,
+                        mapping={
+                            "app_channel": 0,
+                            "hw_name": "FAKE-TS",
+                            "hw_index": 0,
+                            "hw_channel": 0,
+                        },
+                        capabilities=("lin_raw", "lin_diag", "e68_flash"),
                     )
                 ],
             ),
@@ -141,6 +156,11 @@ class FakeHostBackend:
                         channel_name="LIN 0",
                         bus="LIN",
                         channel_index=0,
+                        mapping={
+                            "device_index": 0,
+                            "channel_index": 0,
+                        },
+                        capabilities=("lin_raw", "lin_diag", "e68_flash"),
                     )
                 ],
             ),
