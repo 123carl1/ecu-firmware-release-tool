@@ -4,9 +4,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from unified_can_lin_host_tool.backends.fake_backend import FakeHostBackend, FakeHostSession
+from unified_can_lin_host_tool.backends.base import HostBackend, HostSession
+from unified_can_lin_host_tool.core.cancel import CancellationToken, OperationCancelled
 from unified_can_lin_host_tool.profile import ToolProfile
-from unified_can_lin_host_tool.ui.models import UiChannel
+from unified_can_lin_host_tool.ui.models import UiChannel, WorkerEvent
 
 
 class DeviceScanWorker(QObject):
@@ -14,7 +15,7 @@ class DeviceScanWorker(QObject):
     failed = Signal(str)
     finished = Signal()
 
-    def __init__(self, backend: FakeHostBackend) -> None:
+    def __init__(self, backend: HostBackend) -> None:
         super().__init__()
         self._backend = backend
 
@@ -33,7 +34,7 @@ class ConnectWorker(QObject):
     failed = Signal(str)
     finished = Signal()
 
-    def __init__(self, backend: FakeHostBackend, channel: UiChannel, profile: ToolProfile) -> None:
+    def __init__(self, backend: HostBackend, channel: UiChannel, profile: ToolProfile) -> None:
         super().__init__()
         self._backend = backend
         self._channel = channel
@@ -55,11 +56,15 @@ class UdsWorker(QObject):
     failed = Signal(str)
     finished = Signal()
 
-    def __init__(self, session: FakeHostSession, payload: bytes, *, log_dir: Path = Path("logs")) -> None:
+    def __init__(self, session: HostSession, payload: bytes, *, log_dir: Path = Path("logs")) -> None:
         super().__init__()
         self._session = session
         self._payload = payload
         self._log_dir = log_dir
+        self._cancel_token = CancellationToken()
+
+    def cancel(self) -> None:
+        self._cancel_token.cancel()
 
     @Slot()
     def run(self) -> None:
@@ -68,8 +73,11 @@ class UdsWorker(QObject):
                 self._payload,
                 log_dir=self._log_dir,
                 on_event=self.event.emit,
+                cancel_token=self._cancel_token,
             )
             self.result.emit(response)
+        except OperationCancelled:
+            self.event.emit(WorkerEvent(kind="cancelled", message="operation cancelled"))
         except Exception as exc:
             self.failed.emit(str(exc))
         finally:
@@ -84,7 +92,7 @@ class FlashWorker(QObject):
 
     def __init__(
         self,
-        session: FakeHostSession,
+        session: HostSession,
         *,
         flash_driver_path: Path,
         app_path: Path,
@@ -97,6 +105,10 @@ class FlashWorker(QObject):
         self._app_path = app_path
         self._log_dir = log_dir
         self._dry_run = dry_run
+        self._cancel_token = CancellationToken()
+
+    def cancel(self) -> None:
+        self._cancel_token.cancel()
 
     @Slot()
     def run(self) -> None:
@@ -107,8 +119,11 @@ class FlashWorker(QObject):
                 log_dir=self._log_dir,
                 dry_run=self._dry_run,
                 on_event=self.event.emit,
+                cancel_token=self._cancel_token,
             )
             self.result.emit(events)
+        except OperationCancelled:
+            self.event.emit(WorkerEvent(kind="cancelled", message="operation cancelled"))
         except Exception as exc:
             self.failed.emit(str(exc))
         finally:
