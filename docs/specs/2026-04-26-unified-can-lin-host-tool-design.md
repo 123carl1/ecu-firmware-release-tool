@@ -104,11 +104,13 @@ PySide6 UI 线程只负责渲染、收集用户操作和接收事件，不允许
    - 打开通道、配置波特率、启动 LIN/CAN 通道在连接 Worker 中执行。
    - 连接成功后由接收 Worker 持续轮询当前活动通道。
    - 接收 Worker 将原始帧、错误和状态变化通过 Qt signal 或线程安全队列送回 UI。
+   - LIN 诊断或刷写占用当前通道时，通用接收 Worker 必须暂停该通道的读取；`0x3D` 响应轮询只能由 `LinDiagTransport` 管理，避免普通接收线程抢走诊断响应。
 
 3. UDS 请求
    - 手动 UDS 请求在 UDS Worker 中执行。
    - UI 只提交请求参数，并接收请求开始、TX/RX、解析结果、超时或失败事件。
    - 同一时间只允许一个 UDS 请求占用当前活动通道，避免和刷写流程抢占 `0x3D` 响应。
+   - 对 LIN 通道，UDS Worker 必须先请求 `BusSession` 进入 `DIAG_EXCLUSIVE` 状态；进入失败则拒绝本次请求。
 
 4. 刷写流程
    - `FlashWorkflow` 必须运行在刷写 Worker 中。
@@ -180,9 +182,9 @@ host_tool/
 `LinDiagTransport` 的职责：
 
 1. 根据 Profile 读取 LIN 诊断参数：
-   - NAD：`0x02`
-   - 请求 ID：`0x3C`
-   - 响应 ID：`0x3D`
+   - NAD：从 Profile 读取，E68 默认值为 `0x02`
+   - 请求 ID：从 Profile 读取，E68 默认值为 `0x3C`
+   - 响应 ID：从 Profile 读取，E68 默认值为 `0x3D`
    - 校验和：诊断帧使用 Classic checksum
    - poll timeout
    - poll gap
@@ -242,6 +244,7 @@ class LinDiagTransport:
 厂家差异由适配器内部处理：
 
 1. USB2XXX 可以优先使用官方 `LIN_UDS_Request` / `LIN_UDS_Response`，但仍要把 TX/RX 和超时转换成统一事件。
+   - 如果官方 UDS helper 不能暴露逐帧 TX/RX、frame gap、poll timeout、poll gap 或 `0x78` 轮询细节，第一版必须退回原始 LIN 帧发送和 `0x3D` 轮询实现。
 2. TSMaster 使用主机发送 `0x3C`，再 `transmit_header_and_receive_msg` 轮询 `0x3D`。
 3. 如果厂家 SDK 自动处理 checksum，适配器仍必须在日志里标记使用的是 Classic checksum 诊断帧。
 
@@ -699,9 +702,67 @@ NRC 显示必须包含含义：
 6. 同星完整 E68 LIN 刷写。
 7. 每次硬件刷写保存完整日志。
 
-## MVP 完成标准
+## 阶段交付
 
-第一版完成必须满足：
+第一版总目标较大，实施时拆成 M0/M1/M2 三个阶段，避免一开始同时做 UI、双厂家适配、通用 CAN/LIN 和完整刷写。
+
+### M0：单工具链刷写闭环
+
+目标：先证明 E68 LIN 刷写状态机、CRC32、Seed/Key、LIN 诊断传输和失败恢复能跑通。
+
+范围：
+
+1. 可以无 UI，或只有极简命令行/极简窗口。
+2. 只支持一个优先工具链。建议先选当前最容易验证的一套，例如图莫斯 USB2XXX 或同星 TSMaster。
+3. 实现 `LinDiagTransport`。
+4. 实现 E68 Level1/FBL SeedKey。
+5. 实现 `.bin` 输入；`.hex` 可放到 M1。
+6. 实现 E68 LIN 完整刷写流程。
+7. 保存文本日志。
+8. 通过纯逻辑测试和一次真实硬件刷写。
+
+M0 不要求：
+
+1. 完整 PySide6 界面。
+2. 双厂家适配。
+3. CAN 通用能力。
+4. Profile 下拉管理。
+
+### M1：工程师可用 GUI 版
+
+目标：把 M0 的刷写闭环变成日常可用的工程师上位机。
+
+范围：
+
+1. PySide6 混合工程面板。
+2. Worker 线程模型。
+3. Profile 加载和界面下拉选择。
+4. `.bin + .hex` 文件解析。
+5. 实时 Trace Log + 自动保存。
+6. 模拟总线测试。
+7. 手动 UDS 诊断页。
+8. 当前优先工具链的完整连接、收发、刷写。
+
+M1 完成后，必须能稳定完成 E68 LIN 刷写，并且 UI 不冻结。
+
+### M2：双厂家和通用能力
+
+目标：补齐统一上位机能力。
+
+范围：
+
+1. 第二厂家适配器。
+2. 图莫斯和同星都能扫描、连接、LIN UDS、E68 刷写。
+3. CAN 手动收发。
+4. 通用 LIN 手动收发。
+5. CAN UDS 传输层预留或基础实现。
+6. 后续 CAN Bootloader Profile 接入准备。
+
+M2 完成后，才认为“统一图莫斯/同星 CAN/LIN 上位机第一版”整体达成。
+
+## 整体完成标准
+
+M2 完成后，整体上位机第一版必须满足：
 
 1. 软件启动后能扫描图莫斯和同星工具。
 2. 能显示工具和通道列表。
