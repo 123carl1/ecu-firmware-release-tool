@@ -25,6 +25,18 @@ class FakeHostBackendTest(unittest.TestCase):
 
         self.assertEqual(response, bytes.fromhex("50 01"))
 
+    def test_fake_backend_repeats_same_uds_request_without_response_shift(self):
+        backend = FakeHostBackend()
+        profile = load_profile(Path("profiles/e68_lin_bootloader.yaml"))
+        channel = backend.scan()[0].channels[0]
+        session = backend.connect(channel, profile)
+
+        first_response = session.request_uds(bytes.fromhex("10 01"))
+        second_response = session.request_uds(bytes.fromhex("10 01"))
+
+        self.assertEqual(first_response, bytes.fromhex("50 01"))
+        self.assertEqual(second_response, bytes.fromhex("50 01"))
+
     def test_fake_backend_flash_emits_progress_trace_and_success_events(self):
         backend = FakeHostBackend()
         profile = load_profile(Path("profiles/e68_lin_bootloader.yaml"))

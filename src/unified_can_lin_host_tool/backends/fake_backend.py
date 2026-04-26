@@ -5,6 +5,7 @@ from pathlib import Path
 
 from unified_can_lin_host_tool.adapters.fake import FakeLinAdapter
 from unified_can_lin_host_tool.core.events import TraceEvent
+from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.core.session import BusSession
 from unified_can_lin_host_tool.e68.flash_workflow import FlashWorkflow
 from unified_can_lin_host_tool.firmware.image import load_bin_image
@@ -29,19 +30,17 @@ class TraceEventBridge:
 class FakeHostSession:
     def __init__(self, profile: ToolProfile) -> None:
         self.profile = profile
-        self.adapter = FakeLinAdapter(
-            responses=[
-                (profile.bus.response_id, _lin_single(profile.bus.nad, bytes.fromhex("50 01"))),
-                (profile.bus.response_id, _lin_single(profile.bus.nad, bytes.fromhex("50 03"))),
-                (
-                    profile.bus.response_id,
-                    _lin_single(profile.bus.nad, bytes.fromhex("67 01 35 79 24 68")),
-                ),
-            ]
-        )
+        self.adapter = FakeLinAdapter()
         self.transport = LinDiagTransport(self.adapter, profile)
 
     def request_uds(self, payload: bytes) -> bytes:
+        response_payload = _manual_uds_response(payload)
+        self.adapter = FakeLinAdapter(
+            responses=[
+                (self.profile.bus.response_id, _lin_single(self.profile.bus.nad, response_payload)),
+            ]
+        )
+        self.transport = LinDiagTransport(self.adapter, self.profile)
         return self.transport.request(payload).payload
 
     def flash_e68(
@@ -138,3 +137,13 @@ def _lin_single(nad: int, payload: bytes) -> bytes:
     if len(payload) > 6:
         raise ValueError("fake LIN single-frame payload must be at most 6 bytes")
     return bytes([nad, len(payload)]) + payload + bytes([0xFF] * (6 - len(payload)))
+
+
+def _manual_uds_response(payload: bytes) -> bytes:
+    if payload == bytes.fromhex("10 01"):
+        return bytes.fromhex("50 01")
+    if payload == bytes.fromhex("10 03"):
+        return bytes.fromhex("50 03")
+    if payload == bytes.fromhex("27 01"):
+        return bytes.fromhex("67 01 35 79 24 68")
+    raise HostToolError(ErrorCategory.UDS, f"fake UDS request is not supported: {payload.hex(' ')}")
