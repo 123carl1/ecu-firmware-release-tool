@@ -114,6 +114,7 @@ PySide6 UI 线程只负责渲染、收集用户操作和接收事件，不允许
 
 4. 刷写流程
    - `FlashWorkflow` 必须运行在刷写 Worker 中。
+   - `FlashWorkflow` 启动前必须由 `BusSession` 成功进入 `DIAG_EXCLUSIVE` 状态；退出、失败或取消收尾时必须释放该独占状态。
    - UI 只接收阶段、进度、TX/RX、错误、完成、取消结果。
    - 刷写进行中禁止手动收发和手动 UDS 操作，除非先请求取消并等待 Worker 进入安全停止点。
 
@@ -714,19 +715,20 @@ NRC 显示必须包含含义：
 
 1. 可以无 UI，或只有极简命令行/极简窗口。
 2. 只支持一个优先工具链。建议先选当前最容易验证的一套，例如图莫斯 USB2XXX 或同星 TSMaster。
-3. 实现 `LinDiagTransport`。
-4. 实现 E68 Level1/FBL SeedKey。
-5. 实现 `.bin` 输入；`.hex` 可放到 M1。
-6. 实现 E68 LIN 完整刷写流程。
-7. 保存文本日志。
-8. 通过纯逻辑测试和一次真实硬件刷写。
+3. 使用固定 YAML/Profile 文件或命令行参数加载 Profile，不要求 GUI 下拉选择。
+4. 实现 `LinDiagTransport`，但不能把 E68 的 NAD、请求 ID、响应 ID、poll gap、frame gap 等参数硬编码进传输层；这些参数必须来自 Profile。
+5. 实现 E68 Level1/FBL SeedKey。
+6. 实现 `.bin` 输入；`.hex` 可放到 M1。
+7. 实现 E68 LIN 完整刷写流程。
+8. 保存文本日志。
+9. 通过纯逻辑测试和一次真实硬件刷写。
 
 M0 不要求：
 
 1. 完整 PySide6 界面。
 2. 双厂家适配。
 3. CAN 通用能力。
-4. Profile 下拉管理。
+4. Profile 图形化下拉管理。
 
 ### M1：工程师可用 GUI 版
 
