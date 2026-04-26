@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from time import monotonic, sleep
+
+from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
+from unified_can_lin_host_tool.profile import ToolProfile
+from unified_can_lin_host_tool.transport.base import BusAdapter, LinFrame
+
+SleepFunc = Callable[[float], None]
+
+
+@dataclass(frozen=True)
+class UdsResponse:
+    payload: bytes
+    raw_frames: tuple[LinFrame, ...]
+
+
+class LinDiagTransport:
+    def __init__(
+        self,
+        adapter: BusAdapter,
+        profile: ToolProfile,
+        *,
+        sleep_func: SleepFunc = sleep,
+    ) -> None:
+        self._adapter = adapter
+        self._profile = profile
+        self._sleep = sleep_func
+
+    def request(
+        self,
+        uds_payload: bytes,
+        *,
+        expect_sid: int | None = None,
+        expect_prefix: bytes | None = None,
+        timeout_ms: int | None = None,
+        allow_response_pending: bool = False,
+    ) -> UdsResponse:
+        if not uds_payload:
+            raise HostToolError(ErrorCategory.UDS, "UDS request payload must not be empty")
+
+        for frame in self._build_request_frames(uds_payload):
+            self._adapter.send_lin_frame(self._profile.bus.request_id, frame)
+            self._sleep(self._profile.uds.frame_gap_ms / 1000.0)
+
+        return self._poll_response(
+            expect_sid=expect_sid,
+            expect_prefix=expect_prefix,
+            timeout_ms=timeout_ms or self._profile.uds.poll_timeout_ms,
+            allow_response_pending=allow_response_pending,
+        )
+
+    def _build_request_frames(self, uds_payload: bytes) -> list[bytes]:
+        if len(uds_payload) <= self._profile.uds.max_transfer_payload:
+            return [_pad(bytes([self._profile.bus.nad, len(uds_payload)]) + uds_payload)]
+
+        if len(uds_payload) > 0xFFF:
+            raise HostToolError(ErrorCategory.UDS, "LIN UDS request is too long")
+
+        frames = [
+            _pad(
+                bytes(
+                    [
+                        self._profile.bus.nad,
+                        0x10 | ((len(uds_payload) >> 8) & 0x0F),
+                        len(uds_payload) & 0xFF,
+                    ]
+                )
+                + uds_payload[:5]
+            )
+        ]
+
+        sequence_number = 1
+        for offset in range(5, len(uds_payload), 6):
+            chunk = uds_payload[offset : offset + 6]
+            frames.append(_pad(bytes([self._profile.bus.nad, 0x20 | sequence_number]) + chunk))
+            sequence_number = (sequence_number + 1) & 0x0F
+
+        return frames
+
+    def _poll_response(
+        self,
+        *,
+        expect_sid: int | None,
+        expect_prefix: bytes | None,
+        timeout_ms: int,
+        allow_response_pending: bool,
+    ) -> UdsResponse:
+        raw_frames: list[LinFrame] = []
+        deadline = monotonic() + timeout_ms / 1000.0
+
+        while monotonic() <= deadline:
+            remaining_ms = max(1, int((deadline - monotonic()) * 1000))
+            poll_timeout = min(remaining_ms, self._profile.uds.poll_gap_ms)
+            frame = self._adapter.receive_lin_frame(self._profile.bus.response_id, poll_timeout)
+            if frame is None:
+                self._sleep(self._profile.uds.poll_gap_ms / 1000.0)
+                continue
+
+            raw_frames.append(frame)
+            payload = self._parse_single_frame_response(frame)
+            if _is_response_pending(payload):
+                if allow_response_pending:
+                    continue
+                raise HostToolError(ErrorCategory.UDS, "received NRC 0x78 response pending")
+
+            if payload.startswith(b"\x7F"):
+                raise HostToolError(ErrorCategory.UDS, f"received NRC 0x{payload[-1]:02X}")
+            if expect_sid is not None and payload[0] != expect_sid:
+                raise HostToolError(ErrorCategory.UDS, "positive response SID mismatch")
+            if expect_prefix is not None and not payload.startswith(expect_prefix):
+                raise HostToolError(ErrorCategory.UDS, "positive response prefix mismatch")
+            return UdsResponse(payload=payload, raw_frames=tuple(raw_frames))
+
+        raise HostToolError(ErrorCategory.TRANSPORT, "LIN UDS response timeout")
+
+    def _parse_single_frame_response(self, frame: LinFrame) -> bytes:
+        if frame.frame_id != self._profile.bus.response_id:
+            raise HostToolError(ErrorCategory.TRANSPORT, "LIN response ID mismatch")
+        if len(frame.data) != 8:
+            raise HostToolError(ErrorCategory.TRANSPORT, "LIN response frame must be 8 bytes")
+        if frame.data[0] != self._profile.bus.nad:
+            raise HostToolError(ErrorCategory.TRANSPORT, "LIN response NAD mismatch")
+
+        pci = frame.data[1]
+        if (pci & 0xF0) != 0:
+            raise HostToolError(ErrorCategory.TRANSPORT, "only single-frame LIN responses are supported in M0")
+        payload_len = pci & 0x0F
+        if payload_len > 6:
+            raise HostToolError(ErrorCategory.TRANSPORT, "LIN response payload length is invalid")
+        return frame.data[2 : 2 + payload_len]
+
+
+def _pad(data: bytes) -> bytes:
+    if len(data) > 8:
+        raise HostToolError(ErrorCategory.TRANSPORT, "LIN frame exceeds 8 bytes")
+    return data + bytes([0xFF] * (8 - len(data)))
+
+
+def _is_response_pending(payload: bytes) -> bool:
+    return len(payload) >= 3 and payload[0] == 0x7F and payload[2] == 0x78
+
