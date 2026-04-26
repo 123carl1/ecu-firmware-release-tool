@@ -1,9 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
+
 from unified_can_lin_host_tool.adapters.fake import FakeLinAdapter
+from unified_can_lin_host_tool.core.events import TraceEvent
+from unified_can_lin_host_tool.core.session import BusSession
+from unified_can_lin_host_tool.e68.flash_workflow import FlashWorkflow
+from unified_can_lin_host_tool.firmware.image import load_bin_image
 from unified_can_lin_host_tool.profile import ToolProfile
+from unified_can_lin_host_tool.trace import TraceLogger
 from unified_can_lin_host_tool.transport.lin_diag import LinDiagTransport
-from unified_can_lin_host_tool.ui.models import UiChannel, UiDevice
+from unified_can_lin_host_tool.ui.models import UiChannel, UiDevice, WorkerEvent
+
+EventCallback = Callable[[WorkerEvent], None]
+
+
+class TraceEventBridge:
+    def __init__(self, logger: TraceLogger, emit: EventCallback) -> None:
+        self._logger = logger
+        self._emit = emit
+
+    def write(self, event: TraceEvent) -> None:
+        self._logger.write(event)
+        self._emit(WorkerEvent(kind="trace", message="LIN frame", trace=event))
 
 
 class FakeHostSession:
@@ -23,6 +43,56 @@ class FakeHostSession:
 
     def request_uds(self, payload: bytes) -> bytes:
         return self.transport.request(payload).payload
+
+    def flash_e68(
+        self,
+        *,
+        flash_driver_path: Path,
+        app_path: Path,
+        log_dir: Path,
+        dry_run: bool = True,
+        on_event: EventCallback | None = None,
+    ) -> list[WorkerEvent]:
+        events: list[WorkerEvent] = []
+
+        def emit(event: WorkerEvent) -> None:
+            events.append(event)
+            if on_event is not None:
+                on_event(event)
+
+        emit(WorkerEvent(kind="started", message="E68 flash started", progress=0))
+        trace_logger = TraceLogger(log_dir)
+        try:
+            flash_driver = load_bin_image(
+                flash_driver_path,
+                start_address=self.profile.memory.flash_driver_ram,
+                max_size=self.profile.memory.flash_driver_max_size,
+            )
+            app = load_bin_image(
+                app_path,
+                start_address=self.profile.memory.app_start,
+                max_size=self.profile.memory.app_size,
+            )
+            emit(WorkerEvent(kind="progress", message="Firmware images loaded", progress=10))
+
+            adapter = FakeLinAdapter.for_e68_flash_success(
+                self.profile,
+                flash_driver_data=flash_driver.data,
+                app_data=app.data,
+            )
+            bridge = TraceEventBridge(trace_logger, emit)
+            transport = LinDiagTransport(adapter, self.profile, sleep_func=lambda _: None, trace_logger=bridge)
+            workflow = FlashWorkflow(self.profile, transport, BusSession())
+
+            message = "Fake flash workflow running" if dry_run else "Fake flash workflow running without hardware"
+            emit(WorkerEvent(kind="progress", message=message, progress=20))
+            result = workflow.run(flash_driver=flash_driver, app=app)
+            if result.success:
+                emit(WorkerEvent(kind="progress", message="Flash workflow completed", progress=100))
+                emit(WorkerEvent(kind="result", message="FLASH SUCCESS", progress=100))
+            return events
+        finally:
+            trace_logger.close()
 
 
 class FakeHostBackend:

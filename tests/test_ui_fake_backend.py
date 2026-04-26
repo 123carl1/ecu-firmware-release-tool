@@ -24,3 +24,26 @@ class FakeHostBackendTest(unittest.TestCase):
         response = session.request_uds(bytes.fromhex("10 01"))
 
         self.assertEqual(response, bytes.fromhex("50 01"))
+
+    def test_fake_backend_flash_emits_progress_trace_and_success_events(self):
+        backend = FakeHostBackend()
+        profile = load_profile(Path("profiles/e68_lin_bootloader.yaml"))
+        channel = backend.scan()[0].channels[0]
+        session = backend.connect(channel, profile)
+        callback_events = []
+
+        events = list(
+            session.flash_e68(
+                flash_driver_path=Path("tests/fixtures/flash_driver_18b.bin"),
+                app_path=Path("tests/fixtures/app_20b.bin"),
+                log_dir=Path("logs"),
+                dry_run=True,
+                on_event=callback_events.append,
+            )
+        )
+
+        self.assertEqual(events[0].kind, "started")
+        self.assertTrue(any(event.kind == "progress" for event in events))
+        self.assertTrue(any(event.kind == "trace" for event in callback_events))
+        self.assertEqual(events[-1].kind, "result")
+        self.assertEqual(events[-1].message, "FLASH SUCCESS")

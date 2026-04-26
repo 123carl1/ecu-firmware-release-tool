@@ -1,1 +1,1 @@
-"""Host backend implementations."""
+"""上位机后端实现。"""

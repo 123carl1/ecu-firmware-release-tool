@@ -1,1 +1,1 @@
-"""PySide6 user interface package."""
+"""PySide6 用户界面包。"""

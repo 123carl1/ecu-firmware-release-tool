@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+
+from unified_can_lin_host_tool.core.events import TraceEvent
 
 
 class ConnectionState(str, Enum):
@@ -27,3 +30,12 @@ class UiDevice:
     name: str
     serial: str
     channels: list[UiChannel]
+
+
+@dataclass(frozen=True)
+class WorkerEvent:
+    kind: str
+    message: str
+    progress: int | None = None
+    trace: TraceEvent | None = None
+    timestamp: datetime = field(default_factory=datetime.now)
