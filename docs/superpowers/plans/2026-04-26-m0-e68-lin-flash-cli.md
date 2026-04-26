@@ -24,9 +24,9 @@
 
 ### M0 做完的判定
 
-1. `python -m unittest discover -s tests -v` 通过。
-2. `python -m unified_can_lin_host_tool.cli.probe --adapter tsmaster` 能枚举或给出明确设备错误。
-3. `python -m unified_can_lin_host_tool.cli.flash_e68_lin --adapter fake --profile profiles/e68_lin_bootloader.yaml --flash-driver tests/fixtures/flash_driver_18b.bin --app tests/fixtures/app_20b.bin --log-dir logs --dry-run` 能跑完整模拟刷写流程。
+1. `$env:PYTHONPATH="src"; python -m unittest discover -s tests -v` 通过。
+2. `$env:PYTHONPATH="src"; python -m unified_can_lin_host_tool.cli.probe --adapter tsmaster` 能枚举或给出明确设备错误。
+3. `$env:PYTHONPATH="src"; python -m unified_can_lin_host_tool.cli.flash_e68_lin --adapter fake --profile profiles/e68_lin_bootloader.yaml --flash-driver tests/fixtures/flash_driver_18b.bin --app tests/fixtures/app_20b.bin --log-dir logs --dry-run` 能跑完整模拟刷写流程。
 4. 真实硬件验证时，命令行必须显式传入 `--adapter tsmaster --no-dry-run`，且日志中能看到 `$10/$27/$31/$34/$36/$37/$11` 的 TX/RX。
 5. 任何失败必须映射到明确错误分类：设备错误、Profile 错误、文件错误、传输错误、UDS 错误、刷写状态错误。
 
@@ -807,7 +807,7 @@ def test_response_pending_waits_for_final_response(self):
     profile = load_profile("profiles/e68_lin_bootloader.yaml")
     adapter = FakeLinAdapter(responses=[
         (0x3D, bytes.fromhex("02 03 7F 31 78 FF FF FF")),
-        (0x3D, bytes.fromhex("02 05 71 01 FF 00 00 FF")),
+        (0x3D, bytes.fromhex("02 04 71 01 FF 00 FF FF")),
     ])
     transport = LinDiagTransport(adapter, profile)
 
@@ -1388,4 +1388,3 @@ Expected:
 3. 真实刷写若尚未执行，必须明确标记为未完成，不允许声称 M0 刷写闭环完成。
 4. Trace Log 足以复盘每条 LIN TX/RX。
 5. `FlashWorkflow` 的 `DIAG_EXCLUSIVE` 申请和释放已有测试覆盖。
-
