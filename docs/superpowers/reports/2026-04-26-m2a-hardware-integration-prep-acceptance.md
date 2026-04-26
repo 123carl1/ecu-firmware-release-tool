@@ -82,6 +82,46 @@ git status --short --branch
 
 说明：PySide6 当前仍会打印字体目录警告，但命令退出码为 0。该问题仍后置到打包发布阶段处理。
 
+## 真实窗口验证
+
+执行方式：
+
+1. 不设置 `QT_QPA_PLATFORM=offscreen`，正常创建并显示 Qt 主窗口。
+2. 点击 `扫描`。
+3. 选择 Fake TSMaster 的 `LIN 0`。
+4. 点击 `连接`。
+5. 在 UDS 页发送 `10 01`。
+6. 确认响应区出现 `50 01`。
+7. 确认 Trace Log 出现 `id=0x3C` 和 `id=0x3D`。
+8. 确认 Trace Log 不出现 `ERROR: operation cancelled`。
+9. 在 E68 刷写页点击 `使用测试 fixture`。
+10. 点击 `开始刷写`。
+11. 确认阶段日志出现 `FLASH SUCCESS`，进度条到 100%。
+12. 截图并关闭窗口，确认 active threads 已收尾。
+
+结果：
+
+```text
+OK window visible
+OK scan devices
+OK connect fake lin
+OK uds response
+OK uds tx trace
+OK uds rx trace
+OK no cancelled error trace
+OK fake flash success
+OK flash progress 100
+OK screenshot saved logs\ui_flow_m2a.png
+OK threads stopped
+UI FLOW M2A OK
+```
+
+截图路径：
+
+```text
+logs/ui_flow_m2a.png
+```
+
 ## 未覆盖项
 
 1. 未验证真实 TSMaster USB 枚举。
