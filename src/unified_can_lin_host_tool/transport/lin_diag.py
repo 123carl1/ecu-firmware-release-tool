@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from time import monotonic, sleep
 
+from unified_can_lin_host_tool.core.cancel import CancellationToken
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.core.events import TraceEvent
 from unified_can_lin_host_tool.profile import ToolProfile
@@ -41,20 +42,24 @@ class LinDiagTransport:
         expect_prefix: bytes | None = None,
         timeout_ms: int | None = None,
         allow_response_pending: bool = False,
+        cancel_token: CancellationToken | None = None,
     ) -> UdsResponse:
         if not uds_payload:
             raise HostToolError(ErrorCategory.UDS, "UDS request payload must not be empty")
 
         for frame in self._build_request_frames(uds_payload):
+            _throw_if_cancelled(cancel_token)
             self._adapter.send_lin_frame(self._profile.bus.request_id, frame)
             self._write_trace("TX", self._profile.bus.request_id, frame)
             self._sleep(self._profile.uds.frame_gap_ms / 1000.0)
+            _throw_if_cancelled(cancel_token)
 
         return self._poll_response(
             expect_sid=expect_sid,
             expect_prefix=expect_prefix,
             timeout_ms=timeout_ms or self._profile.uds.poll_timeout_ms,
             allow_response_pending=allow_response_pending,
+            cancel_token=cancel_token,
         )
 
     def _build_request_frames(self, uds_payload: bytes) -> list[bytes]:
@@ -92,16 +97,20 @@ class LinDiagTransport:
         expect_prefix: bytes | None,
         timeout_ms: int,
         allow_response_pending: bool,
+        cancel_token: CancellationToken | None,
     ) -> UdsResponse:
         raw_frames: list[LinFrame] = []
         deadline = monotonic() + timeout_ms / 1000.0
 
         while monotonic() <= deadline:
+            _throw_if_cancelled(cancel_token)
             remaining_ms = max(1, int((deadline - monotonic()) * 1000))
             poll_timeout = min(remaining_ms, self._profile.uds.poll_gap_ms)
             frame = self._adapter.receive_lin_frame(self._profile.bus.response_id, poll_timeout)
+            _throw_if_cancelled(cancel_token)
             if frame is None:
                 self._sleep(self._profile.uds.poll_gap_ms / 1000.0)
+                _throw_if_cancelled(cancel_token)
                 continue
 
             raw_frames.append(frame)
@@ -153,3 +162,8 @@ def _pad(data: bytes) -> bytes:
 
 def _is_response_pending(payload: bytes) -> bool:
     return len(payload) >= 3 and payload[0] == 0x7F and payload[2] == 0x78
+
+
+def _throw_if_cancelled(cancel_token: CancellationToken | None) -> None:
+    if cancel_token is not None:
+        cancel_token.throw_if_cancelled()
