@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from time import monotonic, sleep
 
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
+from unified_can_lin_host_tool.core.events import TraceEvent
 from unified_can_lin_host_tool.profile import ToolProfile
+from unified_can_lin_host_tool.trace import TraceLogger
 from unified_can_lin_host_tool.transport.base import BusAdapter, LinFrame
 
 SleepFunc = Callable[[float], None]
@@ -24,10 +26,12 @@ class LinDiagTransport:
         profile: ToolProfile,
         *,
         sleep_func: SleepFunc = sleep,
+        trace_logger: TraceLogger | None = None,
     ) -> None:
         self._adapter = adapter
         self._profile = profile
         self._sleep = sleep_func
+        self._trace = trace_logger
 
     def request(
         self,
@@ -43,6 +47,7 @@ class LinDiagTransport:
 
         for frame in self._build_request_frames(uds_payload):
             self._adapter.send_lin_frame(self._profile.bus.request_id, frame)
+            self._write_trace("TX", self._profile.bus.request_id, frame)
             self._sleep(self._profile.uds.frame_gap_ms / 1000.0)
 
         return self._poll_response(
@@ -100,6 +105,7 @@ class LinDiagTransport:
                 continue
 
             raw_frames.append(frame)
+            self._write_trace("RX", frame.frame_id, frame.data)
             payload = self._parse_single_frame_response(frame)
             if _is_response_pending(payload):
                 if allow_response_pending:
@@ -132,6 +138,10 @@ class LinDiagTransport:
             raise HostToolError(ErrorCategory.TRANSPORT, "LIN response payload length is invalid")
         return frame.data[2 : 2 + payload_len]
 
+    def _write_trace(self, direction: str, frame_id: int, data: bytes) -> None:
+        if self._trace is not None:
+            self._trace.write(TraceEvent(direction=direction, frame_id=frame_id, data=data))
+
 
 def _pad(data: bytes) -> bytes:
     if len(data) > 8:
@@ -141,4 +151,3 @@ def _pad(data: bytes) -> bytes:
 
 def _is_response_pending(payload: bytes) -> bool:
     return len(payload) >= 3 and payload[0] == 0x7F and payload[2] == 0x78
-
