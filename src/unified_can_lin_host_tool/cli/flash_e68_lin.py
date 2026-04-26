@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from unified_can_lin_host_tool.adapters.fake import FakeLinAdapter
-from unified_can_lin_host_tool.adapters.tsmaster import TsmasterAdapter
+from unified_can_lin_host_tool.adapters.tsmaster import DEFAULT_TSMASTER_DLL, TsmasterAdapter
 from unified_can_lin_host_tool.core.errors import HostToolError
 from unified_can_lin_host_tool.core.session import BusSession
 from unified_can_lin_host_tool.e68.flash_workflow import FlashWorkflow
@@ -23,6 +23,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-dir", type=Path, default=Path("logs"))
     parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
     parser.add_argument("--no-dry-run", dest="dry_run", action="store_false")
+    parser.add_argument("--tsmaster-dll", "--dll", dest="tsmaster_dll", default=DEFAULT_TSMASTER_DLL)
+    parser.add_argument("--tsmaster-app", default="Codex_UnifiedHostTool")
+    parser.add_argument("--tsmaster-app-channel", "--tsmaster-channel", dest="tsmaster_app_channel", type=int, default=0)
+    parser.add_argument("--tsmaster-hw-name", default="TC1016")
+    parser.add_argument("--tsmaster-hw-subtype", type=int, default=11)
+    parser.add_argument("--tsmaster-hw-index", type=int, default=0)
+    parser.add_argument("--tsmaster-hw-channel", type=int, default=0)
     return parser
 
 
@@ -44,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"adapter={args.adapter}")
         print(f"flash_driver={flash_driver.path} start=0x{flash_driver.start_address:08X} size={flash_driver.size}")
         print(f"app={app.path} start=0x{app.start_address:08X} size={app.size}")
+        if args.adapter == "tsmaster":
+            _print_tsmaster_mapping(args)
 
         if args.adapter == "tsmaster" and args.dry_run:
             print("DRY RUN: TSMaster 参数检查完成，未发送任何硬件帧。")
@@ -61,7 +70,16 @@ def main(argv: list[str] | None = None) -> int:
             if input("真实刷写会擦除并重写 App，输入 YES 继续: ") != "YES":
                 print("CANCELLED")
                 return 1
-            adapter = TsmasterAdapter(baud_kbps=profile.bus.baudrate / 1000.0)
+            adapter = TsmasterAdapter(
+                dll_path=args.tsmaster_dll,
+                app_name=args.tsmaster_app,
+                app_channel=args.tsmaster_app_channel,
+                hw_name=args.tsmaster_hw_name,
+                hw_subtype=args.tsmaster_hw_subtype,
+                hw_index=args.tsmaster_hw_index,
+                hw_channel=args.tsmaster_hw_channel,
+                baud_kbps=profile.bus.baudrate / 1000.0,
+            )
             adapter.open_lin()
             sleep_func = None
 
@@ -86,6 +104,15 @@ def main(argv: list[str] | None = None) -> int:
             trace_logger.close()
 
 
+def _print_tsmaster_mapping(args: argparse.Namespace) -> None:
+    print(f"tsmaster_dll={args.tsmaster_dll}")
+    print(f"tsmaster_app={args.tsmaster_app}")
+    print(f"tsmaster_app_channel={args.tsmaster_app_channel}")
+    print(f"tsmaster_hw_name={args.tsmaster_hw_name}")
+    print(f"tsmaster_hw_subtype={args.tsmaster_hw_subtype}")
+    print(f"tsmaster_hw_index={args.tsmaster_hw_index}")
+    print(f"tsmaster_hw_channel={args.tsmaster_hw_channel}")
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
-

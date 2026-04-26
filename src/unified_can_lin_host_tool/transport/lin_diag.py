@@ -134,6 +134,8 @@ class LinDiagTransport:
         if (pci & 0xF0) != 0:
             raise HostToolError(ErrorCategory.TRANSPORT, "only single-frame LIN responses are supported in M0")
         payload_len = pci & 0x0F
+        if payload_len == 0:
+            raise HostToolError(ErrorCategory.TRANSPORT, "LIN response payload length is zero")
         if payload_len > 6:
             raise HostToolError(ErrorCategory.TRANSPORT, "LIN response payload length is invalid")
         return frame.data[2 : 2 + payload_len]

@@ -1,6 +1,7 @@
 import unittest
 
 from unified_can_lin_host_tool.adapters.fake import FakeLinAdapter
+from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.profile import load_profile
 from unified_can_lin_host_tool.transport.lin_diag import LinDiagTransport
 
@@ -44,3 +45,12 @@ class LinDiagTransportTests(unittest.TestCase):
 
         self.assertEqual(response.payload[:4], bytes.fromhex("71 01 FF 00"))
 
+    def test_empty_single_frame_response_is_classified_error(self):
+        profile = load_profile("profiles/e68_lin_bootloader.yaml")
+        adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("02 00 FF FF FF FF FF FF"))])
+        transport = LinDiagTransport(adapter, profile, sleep_func=lambda _: None)
+
+        with self.assertRaises(HostToolError) as caught:
+            transport.request(bytes.fromhex("10 01"), expect_sid=0x50)
+
+        self.assertEqual(caught.exception.category, ErrorCategory.TRANSPORT)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import monotonic, sleep
 
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.core.session import BusSession
@@ -45,7 +46,7 @@ class FlashWorkflow:
         self._transport.request(bytes.fromhex("10 02"), expect_prefix=bytes.fromhex("50 02"))
 
     def _run_boot_programming(self, *, flash_driver: FirmwareImage, app: FirmwareImage) -> None:
-        self._transport.request(bytes.fromhex("10 02"), expect_prefix=bytes.fromhex("50 02"))
+        self._wait_for_boot_programming_session()
         self._security_access(
             seed_sub_function=0x09,
             key_sub_function=0x0A,
@@ -72,6 +73,27 @@ class FlashWorkflow:
             bytes([0x27, key_sub_function]) + key,
             expect_prefix=bytes([0x67, key_sub_function]),
         )
+
+    def _wait_for_boot_programming_session(self) -> None:
+        deadline = monotonic() + self._profile.uds.p2_star_ms / 1000.0
+        last_error: HostToolError | None = None
+        while monotonic() <= deadline:
+            try:
+                self._transport.request(
+                    bytes.fromhex("10 02"),
+                    expect_prefix=bytes.fromhex("50 02"),
+                    timeout_ms=self._profile.uds.poll_timeout_ms,
+                )
+                return
+            except HostToolError as exc:
+                if exc.category != ErrorCategory.TRANSPORT:
+                    raise
+                last_error = exc
+                sleep(self._profile.uds.poll_gap_ms / 1000.0)
+
+        if last_error is not None:
+            raise HostToolError(ErrorCategory.TRANSPORT, f"Boot programming session timeout: {last_error.message}") from last_error
+        raise HostToolError(ErrorCategory.TRANSPORT, "Boot programming session timeout")
 
     def _download_image(self, *, start_address: int, data: bytes) -> None:
         self._request_download(start_address=start_address, size=len(data))
@@ -111,4 +133,3 @@ class FlashWorkflow:
             allow_response_pending=True,
             timeout_ms=self._profile.uds.p2_star_ms,
         )
-
