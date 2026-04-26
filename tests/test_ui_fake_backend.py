@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 from unified_can_lin_host_tool.backends.fake_backend import FakeHostBackend
+from unified_can_lin_host_tool.core.cancel import CancellationToken, OperationCancelled
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.profile import load_profile
 
@@ -63,6 +64,38 @@ class FakeHostBackendTest(unittest.TestCase):
             text = log_files[0].read_text(encoding="utf-8")
             self.assertIn("TX LIN id=0x3C", text)
             self.assertIn("RX LIN id=0x3D", text)
+
+    def test_fake_backend_cancelled_uds_takes_priority_over_unsupported_payload(self):
+        backend = FakeHostBackend()
+        profile = load_profile(Path("profiles/e68_lin_bootloader.yaml"))
+        channel = backend.scan()[0].channels[0]
+        session = backend.connect(channel, profile)
+        token = CancellationToken()
+        token.cancel()
+
+        with self.assertRaises(OperationCancelled):
+            session.request_uds(bytes.fromhex("99 99"), cancel_token=token)
+
+        self.assertFalse(session.bus_session.is_diag_exclusive)
+
+    def test_fake_backend_cancelled_flash_takes_priority_over_missing_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = FakeHostBackend()
+            profile = load_profile(Path("profiles/e68_lin_bootloader.yaml"))
+            channel = backend.scan()[0].channels[0]
+            session = backend.connect(channel, profile)
+            token = CancellationToken()
+            token.cancel()
+
+            with self.assertRaises(OperationCancelled):
+                session.flash_e68(
+                    flash_driver_path=Path("missing_flash_driver.bin"),
+                    app_path=Path("missing_app.bin"),
+                    log_dir=Path(tmp),
+                    cancel_token=token,
+                )
+
+            self.assertFalse(session.bus_session.is_diag_exclusive)
 
     def test_fake_backend_uds_and_flash_share_diag_exclusive_lock(self):
         with tempfile.TemporaryDirectory() as tmp:

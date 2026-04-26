@@ -127,6 +127,54 @@ class UiThreadingTest(unittest.TestCase):
         self.assertTrue(worker.cancel_called)
         window.close()
 
+    def test_main_window_stop_keeps_references_when_thread_does_not_stop(self):
+        try:
+            from PySide6.QtCore import QObject, QThread, Signal, Slot
+            from PySide6.QtWidgets import QApplication
+        except ModuleNotFoundError:
+            self.skipTest("PySide6 is not installed")
+
+        from unified_can_lin_host_tool.ui.main_window import MainWindow
+
+        class BlockingWorker(QObject):
+            finished = Signal()
+
+            def __init__(self):
+                super().__init__()
+                self.cancel_called = False
+                self.blocked = True
+
+            def cancel(self):
+                self.cancel_called = True
+
+            @Slot()
+            def run(self):
+                while self.blocked:
+                    QThread.msleep(20)
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        worker = BlockingWorker()
+        window._start_worker(worker)
+        app.processEvents()
+
+        stopped = window._stop_active_threads(wait_ms=1)
+
+        try:
+            self.assertFalse(stopped)
+            self.assertTrue(worker.cancel_called)
+            self.assertTrue(window._active_threads)
+            self.assertTrue(window._active_workers)
+        finally:
+            worker.blocked = False
+            for thread in list(window._active_threads):
+                thread.requestInterruption()
+                thread.quit()
+                thread.wait(1000)
+            window._active_threads.clear()
+            window._active_workers.clear()
+            window.close()
+
     def test_main_window_disables_flash_while_uds_worker_is_running(self):
         try:
             from PySide6.QtCore import QEventLoop, QTimer
@@ -154,6 +202,9 @@ class UiThreadingTest(unittest.TestCase):
 
             self.assertFalse(window.uds_send_button.isEnabled())
             self.assertFalse(window.flash_start_button.isEnabled())
+            self.assertFalse(window.backend_combo.isEnabled())
+            self.assertFalse(window.scan_button.isEnabled())
+            self.assertFalse(window.connect_button.isEnabled())
 
             loop = QEventLoop()
             QTimer.singleShot(500, loop.quit)
@@ -162,5 +213,8 @@ class UiThreadingTest(unittest.TestCase):
 
             self.assertTrue(window.uds_send_button.isEnabled())
             self.assertTrue(window.flash_start_button.isEnabled())
+            self.assertTrue(window.backend_combo.isEnabled())
+            self.assertTrue(window.scan_button.isEnabled())
+            self.assertTrue(window.connect_button.isEnabled())
         finally:
             window.close()

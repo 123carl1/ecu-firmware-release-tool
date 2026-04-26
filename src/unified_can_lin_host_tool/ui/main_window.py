@@ -203,6 +203,7 @@ class MainWindow(QMainWindow):
         return panel
 
     def _start_worker(self, worker: QObject) -> None:
+        self._set_operation_controls_enabled(False)
         thread = QThread(self)
         self._active_threads.append(thread)
         self._active_workers.append(worker)
@@ -213,13 +214,17 @@ class MainWindow(QMainWindow):
         worker.finished.connect(lambda worker=worker: self._remove_worker(worker))
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda thread=thread: self._remove_thread(thread))
+        thread.finished.connect(self._refresh_operation_controls)
         thread.start()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._stop_active_threads()
+        if not self._stop_active_threads():
+            self.status_label.setText("正在取消后台任务")
+            event.ignore()
+            return
         super().closeEvent(event)
 
-    def _stop_active_threads(self) -> None:
+    def _stop_active_threads(self, wait_ms: int = 2000) -> bool:
         for worker in list(self._active_workers):
             cancel = getattr(worker, "cancel", None)
             if callable(cancel):
@@ -240,11 +245,14 @@ class MainWindow(QMainWindow):
                 continue
         for thread in running_threads:
             try:
-                thread.wait(2000)
+                thread.wait(wait_ms)
             except RuntimeError:
                 continue
-        self._active_threads.clear()
-        self._active_workers.clear()
+        self._active_threads = [thread for thread in self._active_threads if _is_thread_running(thread)]
+        if not self._active_threads:
+            self._active_workers.clear()
+        self._refresh_operation_controls()
+        return not self._active_threads
 
     def _remove_worker(self, worker: QObject) -> None:
         if worker in self._active_workers:
@@ -253,6 +261,15 @@ class MainWindow(QMainWindow):
     def _remove_thread(self, thread: QThread) -> None:
         if thread in self._active_threads:
             self._active_threads.remove(thread)
+
+    def _refresh_operation_controls(self) -> None:
+        self._set_operation_controls_enabled(not self._active_threads)
+
+    def _set_operation_controls_enabled(self, enabled: bool) -> None:
+        self.profile_combo.setEnabled(enabled)
+        self.backend_combo.setEnabled(enabled)
+        self.scan_button.setEnabled(enabled)
+        self.connect_button.setEnabled(enabled)
 
     def _on_backend_changed(self, name: str) -> None:
         if name not in self._backends:
@@ -384,3 +401,10 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, level: str, message: str) -> None:
         self.trace_log.appendPlainText(f"{level}: {message}")
+
+
+def _is_thread_running(thread: QThread) -> bool:
+    try:
+        return thread.isRunning()
+    except RuntimeError:
+        return False

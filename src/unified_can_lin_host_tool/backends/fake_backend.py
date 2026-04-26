@@ -45,11 +45,13 @@ class FakeHostSession:
         on_event: EventCallback | None = None,
         cancel_token: CancellationToken | None = None,
     ) -> bytes:
+        _throw_if_cancelled(cancel_token)
         if not self.bus_session.enter_diag_exclusive("uds"):
             raise HostToolError(ErrorCategory.TRANSPORT, "LIN channel is busy")
 
         trace_logger = TraceLogger(log_dir) if log_dir is not None else None
         try:
+            _throw_if_cancelled(cancel_token)
             response_payload = _manual_uds_response(payload)
             self.adapter = FakeLinAdapter(
                 responses=[
@@ -74,6 +76,7 @@ class FakeHostSession:
         on_event: EventCallback | None = None,
         cancel_token: CancellationToken | None = None,
     ) -> list[WorkerEvent]:
+        _throw_if_cancelled(cancel_token)
         events: list[WorkerEvent] = []
 
         def emit(event: WorkerEvent) -> None:
@@ -84,11 +87,13 @@ class FakeHostSession:
         emit(WorkerEvent(kind="started", message="E68 flash started", progress=0))
         trace_logger = TraceLogger(log_dir)
         try:
+            _throw_if_cancelled(cancel_token)
             flash_driver = load_bin_image(
                 flash_driver_path,
                 start_address=self.profile.memory.flash_driver_ram,
                 max_size=self.profile.memory.flash_driver_max_size,
             )
+            _throw_if_cancelled(cancel_token)
             app = load_bin_image(
                 app_path,
                 start_address=self.profile.memory.app_start,
@@ -186,3 +191,8 @@ def _manual_uds_response(payload: bytes) -> bytes:
     if payload == bytes.fromhex("27 01"):
         return bytes.fromhex("67 01 35 79 24 68")
     raise HostToolError(ErrorCategory.UDS, f"fake UDS request is not supported: {payload.hex(' ')}")
+
+
+def _throw_if_cancelled(cancel_token: CancellationToken | None) -> None:
+    if cancel_token is not None:
+        cancel_token.throw_if_cancelled()
