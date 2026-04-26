@@ -22,7 +22,7 @@ M2A 完成必须满足：
 4. UI 后端选择和后端契约不再写死为 `FakeHostBackend` / `FakeHostSession`。
 5. TSMaster 和 USB2XXX 的参数模型存在，UI 能展示当前配置来源和默认值。
 6. 真实后端缺 DLL、缺设备、映射参数错误时，错误能按 `DEVICE` / `PROFILE` / `TRANSPORT` 分类展示，不崩溃。
-7. UDS 和刷写 Worker 支持协作式取消；关闭窗口时如果有运行中操作，必须进入确认或取消流程。
+7. UDS 和刷写 Worker 支持协作式取消；用户主动取消或关闭窗口触发取消时，UI 显示“已取消”，不能走故障错误路径。
 8. `LinDiagTransport` 和 `FlashWorkflow` 能接收取消令牌，并在安全点退出。
 9. 新增 M2A 验收记录，明确“未验证真实硬件”。
 
@@ -139,7 +139,8 @@ class BackendSettingsTest(unittest.TestCase):
         settings = default_backend_settings()
 
         self.assertIsInstance(settings.usb2xxx, Usb2xxxSettings)
-        self.assertEqual(settings.usb2xxx.dll_path, "D:/software/USB2XXX/USB2XXX.dll")
+        self.assertIsInstance(settings.usb2xxx.dll_path, str)
+        self.assertTrue(settings.usb2xxx.dll_path)
         self.assertEqual(settings.usb2xxx.device_index, 0)
         self.assertEqual(settings.usb2xxx.channel_index, 0)
         self.assertEqual(settings.usb2xxx.baudrate, 19200)
@@ -154,6 +155,7 @@ class BackendSettingsTest(unittest.TestCase):
 
         self.assertIn("TSMaster.hw_name: TC1016", summary)
         self.assertIn("TSMaster.hw_channel: 1", summary)
+        self.assertTrue(any(line.startswith("USB2XXX.dll_path: ") for line in summary))
         self.assertIn("USB2XXX.channel_index: 2", summary)
 ```
 
@@ -230,6 +232,8 @@ def default_backend_settings() -> BackendSettings:
     return BackendSettings(tsmaster=TsmasterSettings(), usb2xxx=Usb2xxxSettings())
 ```
 
+说明：`Usb2xxxSettings.dll_path` 只是预期安装路径，M2A 不能把它写成已验证事实。测试只断言字段存在并能展示；真实路径在 M2B 按实物 SDK 确认。
+
 - [ ] **Step 4: 运行测试确认通过**
 
 运行：
@@ -247,7 +251,101 @@ git add src/unified_can_lin_host_tool/backends/settings.py tests/test_backend_se
 git commit -m "新增硬件后端配置模型"
 ```
 
-### Task 2: 定义后端协议并适配 Fake 后端
+### Task 2: 新增协作式取消令牌
+
+**Files:**
+- Create: `src/unified_can_lin_host_tool/core/cancel.py`
+- Create: `tests/test_cancel.py`
+
+- [ ] **Step 1: 写取消令牌测试**
+
+创建 `tests/test_cancel.py`：
+
+```python
+import unittest
+
+from unified_can_lin_host_tool.core.cancel import CancellationToken, OperationCancelled
+
+
+class CancellationTokenTest(unittest.TestCase):
+    def test_new_token_is_not_cancelled(self):
+        token = CancellationToken()
+
+        self.assertFalse(token.is_cancelled)
+
+    def test_cancel_sets_flag(self):
+        token = CancellationToken()
+
+        token.cancel()
+
+        self.assertTrue(token.is_cancelled)
+
+    def test_throw_if_cancelled_raises_cancelled_exception(self):
+        token = CancellationToken()
+        token.cancel()
+
+        with self.assertRaises(OperationCancelled):
+            token.throw_if_cancelled()
+```
+
+- [ ] **Step 2: 运行测试确认失败**
+
+运行：
+
+```powershell
+$env:PYTHONPATH="src"; python -m unittest tests.test_cancel.CancellationTokenTest -v
+```
+
+预期：失败，提示 `unified_can_lin_host_tool.core.cancel` 不存在。
+
+- [ ] **Step 3: 实现取消令牌**
+
+创建 `src/unified_can_lin_host_tool/core/cancel.py`：
+
+```python
+from __future__ import annotations
+
+from threading import Event
+
+
+class OperationCancelled(Exception):
+    pass
+
+
+class CancellationToken:
+    def __init__(self) -> None:
+        self._event = Event()
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def throw_if_cancelled(self) -> None:
+        if self.is_cancelled:
+            raise OperationCancelled("operation cancelled")
+```
+
+- [ ] **Step 4: 运行测试确认通过**
+
+运行：
+
+```powershell
+$env:PYTHONPATH="src"; python -m unittest tests.test_cancel.CancellationTokenTest -v
+```
+
+预期：通过。
+
+- [ ] **Step 5: 提交**
+
+```powershell
+git add src/unified_can_lin_host_tool/core/cancel.py tests/test_cancel.py
+git commit -m "新增协作式取消令牌"
+```
+
+### Task 3: 定义后端协议并适配 Fake 后端
 
 **Files:**
 - Create: `src/unified_can_lin_host_tool/backends/base.py`
@@ -374,34 +472,6 @@ class HostBackend(Protocol):
 
     def connect(self, channel: UiChannel, profile: ToolProfile) -> HostSession:
         ...
-```
-
-注意：这个文件引用 `CancellationToken`，因此 Task 2 执行时可以先创建最小 `src/unified_can_lin_host_tool/core/cancel.py`：
-
-```python
-from __future__ import annotations
-
-from threading import Event
-
-
-class OperationCancelled(Exception):
-    pass
-
-
-class CancellationToken:
-    def __init__(self) -> None:
-        self._event = Event()
-
-    def cancel(self) -> None:
-        self._event.set()
-
-    @property
-    def is_cancelled(self) -> bool:
-        return self._event.is_set()
-
-    def throw_if_cancelled(self) -> None:
-        if self.is_cancelled:
-            raise OperationCancelled("operation cancelled")
 ```
 
 - [ ] **Step 4: 扩展 UI 通道模型**
@@ -536,65 +606,11 @@ $env:PYTHONPATH="src"; $env:QT_QPA_PLATFORM="offscreen"; python -m unittest test
 - [ ] **Step 8: 提交**
 
 ```powershell
-git add src/unified_can_lin_host_tool/backends/base.py src/unified_can_lin_host_tool/core/cancel.py src/unified_can_lin_host_tool/ui/models.py src/unified_can_lin_host_tool/backends/fake_backend.py tests/test_backend_contract.py
+git add src/unified_can_lin_host_tool/backends/base.py src/unified_can_lin_host_tool/ui/models.py src/unified_can_lin_host_tool/backends/fake_backend.py tests/test_backend_contract.py
 git commit -m "抽象上位机后端会话契约"
 ```
 
 ## Chunk 2: 协作式取消和安全退出
-
-### Task 3: 补取消令牌单元测试
-
-**Files:**
-- Modify: `src/unified_can_lin_host_tool/core/cancel.py`
-- Create: `tests/test_cancel.py`
-
-- [ ] **Step 1: 写取消令牌测试**
-
-创建 `tests/test_cancel.py`：
-
-```python
-import unittest
-
-from unified_can_lin_host_tool.core.cancel import CancellationToken, OperationCancelled
-
-
-class CancellationTokenTest(unittest.TestCase):
-    def test_new_token_is_not_cancelled(self):
-        token = CancellationToken()
-
-        self.assertFalse(token.is_cancelled)
-
-    def test_cancel_sets_flag(self):
-        token = CancellationToken()
-
-        token.cancel()
-
-        self.assertTrue(token.is_cancelled)
-
-    def test_throw_if_cancelled_raises_classified_exception(self):
-        token = CancellationToken()
-        token.cancel()
-
-        with self.assertRaises(OperationCancelled):
-            token.throw_if_cancelled()
-```
-
-- [ ] **Step 2: 运行测试**
-
-运行：
-
-```powershell
-$env:PYTHONPATH="src"; python -m unittest tests.test_cancel -v
-```
-
-预期：通过。如果 Task 2 已创建最小实现，这一步应直接通过。
-
-- [ ] **Step 3: 提交**
-
-```powershell
-git add src/unified_can_lin_host_tool/core/cancel.py tests/test_cancel.py
-git commit -m "新增协作式取消令牌"
-```
 
 ### Task 4: `LinDiagTransport` 支持轮询取消
 
@@ -879,27 +895,36 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from unified_can_lin_host_tool.backends.fake_backend import FakeHostBackend
 from unified_can_lin_host_tool.core.cancel import OperationCancelled
 from unified_can_lin_host_tool.profile import load_profile
+from unified_can_lin_host_tool.ui.models import WorkerEvent
 from unified_can_lin_host_tool.ui.workers import UdsWorker
 
 
+class CancellingSession:
+    profile = load_profile("profiles/e68_lin_bootloader.yaml")
+
+    def request_uds(self, *args, **kwargs):
+        raise OperationCancelled("operation cancelled")
+
+
 class WorkerCancellationTest(unittest.TestCase):
-    def test_uds_worker_cancel_sets_token_before_run(self):
-        profile = load_profile("profiles/e68_lin_bootloader.yaml")
-        backend = FakeHostBackend()
-        session = backend.connect(backend.scan()[0].channels[0], profile)
-
+    def test_uds_worker_reports_cancelled_event_instead_of_failed(self):
         with tempfile.TemporaryDirectory() as tmp:
-            worker = UdsWorker(session, bytes.fromhex("10 01"), log_dir=Path(tmp))
-            worker.cancel()
+            worker = UdsWorker(CancellingSession(), bytes.fromhex("10 01"), log_dir=Path(tmp))
+            events: list[WorkerEvent] = []
+            failures: list[str] = []
+            worker.event.connect(events.append)
+            worker.failed.connect(failures.append)
 
-            with self.assertRaises(OperationCancelled):
-                worker._run_for_test()
+            worker.run()
+
+        self.assertEqual(failures, [])
+        self.assertEqual(events[-1].kind, "cancelled")
+        self.assertEqual(events[-1].message, "operation cancelled")
 ```
 
-说明：为了避免直接启动 Qt 线程，`UdsWorker` 可以新增一个私有 `_run_for_test()`，内部复用 `run()` 的核心逻辑。若不想增加测试钩子，则用现有 Qt 测试方式接收 `failed` 信号并断言消息包含取消。
+说明：用户主动取消或关闭窗口触发取消不是故障。Worker 捕获 `OperationCancelled` 后必须通过 `event` 发出 `WorkerEvent(kind="cancelled", message="operation cancelled")`，不能 emit `failed`。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -917,7 +942,8 @@ $env:PYTHONPATH="src"; $env:QT_QPA_PLATFORM="offscreen"; python -m unittest test
 
 ```python
 from unified_can_lin_host_tool.backends.base import HostBackend, HostSession
-from unified_can_lin_host_tool.core.cancel import CancellationToken
+from unified_can_lin_host_tool.core.cancel import CancellationToken, OperationCancelled
+from unified_can_lin_host_tool.ui.models import WorkerEvent
 ```
 
 构造函数类型改为公共协议：
@@ -945,19 +971,26 @@ def cancel(self) -> None:
 cancel_token=self._cancel_token
 ```
 
-如果采用 `_run_for_test()`：
+`UdsWorker.run()` 的异常分支必须区分取消和失败：
 
 ```python
-def _run_for_test(self) -> bytes:
-    return self._session.request_uds(
+try:
+    response = self._session.request_uds(
         self._payload,
         log_dir=self._log_dir,
         on_event=self.event.emit,
         cancel_token=self._cancel_token,
     )
+    self.result.emit(response)
+except OperationCancelled:
+    self.event.emit(WorkerEvent(kind="cancelled", message="operation cancelled"))
+except Exception as exc:
+    self.failed.emit(str(exc))
+finally:
+    self.finished.emit()
 ```
 
-`run()` 内调用 `_run_for_test()` 并 emit 结果。
+`FlashWorker.run()` 使用同样规则：`OperationCancelled` 发 `cancelled` 事件，其他异常才走 `failed`。
 
 - [ ] **Step 4: 运行 Worker/UI 回归**
 
@@ -1056,14 +1089,21 @@ def __init__(
 
 ```python
 self._backend_settings = backend_settings or default_backend_settings()
-self._backends = backends or {"Fake": FakeHostBackend()}
-self._backend = self._backends["Fake"]
+if backends is None:
+    self._backends = {"Fake": FakeHostBackend()}
+else:
+    self._backends = backends
+if not self._backends:
+    raise ValueError("at least one backend must be registered")
+self._backend_name = "Fake" if "Fake" in self._backends else next(iter(self._backends))
+self._backend = self._backends[self._backend_name]
 ```
 
 后端下拉框内容来自 registry：
 
 ```python
 self.backend_combo.addItems(list(self._backends.keys()))
+self.backend_combo.setCurrentText(self._backend_name)
 self.backend_combo.currentTextChanged.connect(self._on_backend_changed)
 ```
 
@@ -1089,6 +1129,18 @@ layout.addRow("backend", self.config_summary_text)
 ```
 
 - [ ] **Step 6: 错误展示保留分类**
+
+`_on_worker_event()` 必须先处理取消事件：
+
+```python
+if event.kind == "cancelled":
+    self.status_label.setText("已取消")
+    self.flash_stage_log.appendPlainText(f"cancelled: {event.message}")
+    self._append_log("CANCELLED", event.message)
+    return
+```
+
+取消事件不能调用 `_show_error()`，Trace Log 里也不能出现 `ERROR: operation cancelled`。
 
 `_show_error()` 如果收到 `HostToolError` 的字符串已经包含 `device:`，直接显示。Worker 当前传 `str(exc)`，先不改事件模型。
 
@@ -1283,8 +1335,9 @@ M2A 不包含真实同星 TSMaster 或图莫斯 USB2XXX 硬件验证。
 5. UDS Worker 和 Flash Worker 支持协作式取消。
 6. `LinDiagTransport` 支持取消令牌。
 7. `FlashWorkflow` 在安全点支持取消，并释放 `DIAG_EXCLUSIVE`。
-8. 关闭窗口时会先请求后台 Worker 取消，再进行线程收尾。
-9. 缺 DLL/缺设备类错误能按分类显示，不崩溃。
+8. 用户主动取消和关闭窗口触发取消时，UI 显示“已取消”，不显示为 `ERROR`。
+9. 关闭窗口时会先请求后台 Worker 取消，再进行线程收尾。
+10. 缺 DLL/缺设备类错误能按分类显示，不崩溃。
 
 ## 自动化验证
 
