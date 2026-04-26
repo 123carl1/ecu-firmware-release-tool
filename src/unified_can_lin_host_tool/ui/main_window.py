@@ -22,22 +22,37 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from unified_can_lin_host_tool.backends.fake_backend import FakeHostBackend, FakeHostSession
+from unified_can_lin_host_tool.backends.base import HostBackend, HostSession
+from unified_can_lin_host_tool.backends.fake_backend import FakeHostBackend
+from unified_can_lin_host_tool.backends.settings import BackendSettings, default_backend_settings
 from unified_can_lin_host_tool.profile import load_profile
 from unified_can_lin_host_tool.ui.models import UiChannel, UiDevice, WorkerEvent
 from unified_can_lin_host_tool.ui.workers import ConnectWorker, DeviceScanWorker, FlashWorker, UdsWorker
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        backends: dict[str, HostBackend] | None = None,
+        backend_settings: BackendSettings | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("Unified CAN/LIN Host Tool - M1 Alpha")
         self.resize(1180, 760)
 
-        self._backend = FakeHostBackend()
+        self._backend_settings = backend_settings or default_backend_settings()
+        if backends is None:
+            self._backends = {"Fake": FakeHostBackend()}
+        else:
+            self._backends = backends
+        if not self._backends:
+            raise ValueError("at least one backend must be registered")
+        self._backend_name = "Fake" if "Fake" in self._backends else next(iter(self._backends))
+        self._backend = self._backends[self._backend_name]
         self._profile_path = Path("profiles/e68_lin_bootloader.yaml")
         self._profile = load_profile(self._profile_path)
-        self._session: FakeHostSession | None = None
+        self._session: HostSession | None = None
         self._selected_channel: UiChannel | None = None
         self._active_threads: list[QThread] = []
         self._active_workers: list[QObject] = []
@@ -62,10 +77,9 @@ class MainWindow(QMainWindow):
         self.profile_combo = QComboBox()
         self.profile_combo.addItem("E68 LIN Bootloader", str(self._profile_path))
         self.backend_combo = QComboBox()
-        self.backend_combo.addItems(["Fake", "TSMaster", "USB2XXX"])
-        self.backend_combo.setCurrentText("Fake")
-        self.backend_combo.model().item(1).setEnabled(False)
-        self.backend_combo.model().item(2).setEnabled(False)
+        self.backend_combo.addItems(list(self._backends.keys()))
+        self.backend_combo.setCurrentText(self._backend_name)
+        self.backend_combo.currentTextChanged.connect(self._on_backend_changed)
 
         form = QFormLayout()
         form.addRow("Profile", self.profile_combo)
@@ -167,6 +181,10 @@ class MainWindow(QMainWindow):
         layout.addRow("request_id", QLabel(f"0x{self._profile.bus.request_id:02X}"))
         layout.addRow("response_id", QLabel(f"0x{self._profile.bus.response_id:02X}"))
         layout.addRow("app_start", QLabel(f"0x{self._profile.memory.app_start:08X}"))
+        self.config_summary_text = QPlainTextEdit()
+        self.config_summary_text.setReadOnly(True)
+        self.config_summary_text.setPlainText("\n".join(self._backend_settings.summary_lines()))
+        layout.addRow("backend", self.config_summary_text)
         return tab
 
     def _build_trace_log(self) -> QWidget:
@@ -228,6 +246,18 @@ class MainWindow(QMainWindow):
         if thread in self._active_threads:
             self._active_threads.remove(thread)
 
+    def _on_backend_changed(self, name: str) -> None:
+        if name not in self._backends:
+            return
+        if self._session is not None:
+            self._session.close()
+        self._backend_name = name
+        self._backend = self._backends[name]
+        self._session = None
+        self._set_connected(False)
+        self.device_tree.clear()
+        self.status_label.setText(f"后端: {name}")
+
     def _on_scan_clicked(self) -> None:
         self.scan_button.setEnabled(False)
         self.status_label.setText("扫描中")
@@ -267,11 +297,11 @@ class MainWindow(QMainWindow):
         worker.finished.connect(lambda: self.connect_button.setEnabled(True))
         self._start_worker(worker)
 
-    def _on_connected(self, session: FakeHostSession) -> None:
+    def _on_connected(self, session: HostSession) -> None:
         self._session = session
         self._set_connected(True)
         self.status_label.setText("已连接")
-        self._append_log("INFO", "Fake LIN connected")
+        self._append_log("INFO", f"{self._backend_name} LIN connected")
 
     def _on_uds_send_clicked(self) -> None:
         if self._session is None:
@@ -321,6 +351,11 @@ class MainWindow(QMainWindow):
         self._start_worker(worker)
 
     def _on_worker_event(self, event: WorkerEvent) -> None:
+        if event.kind == "cancelled":
+            self.status_label.setText("已取消")
+            self.flash_stage_log.appendPlainText(f"cancelled: {event.message}")
+            self._append_log("CANCELLED", event.message)
+            return
         if event.progress is not None:
             self.flash_progress.setValue(event.progress)
         if event.kind == "trace" and event.trace is not None:
