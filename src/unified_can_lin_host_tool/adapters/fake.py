@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unified_can_lin_host_tool.e68.crc32 import e68_crc32
+from unified_can_lin_host_tool.profile import ToolProfile
 from unified_can_lin_host_tool.transport.base import LinFrame
 
 
@@ -16,6 +18,51 @@ class FakeLinAdapter:
             if response.frame_id == frame_id:
                 return self._responses.pop(index)
         return None
+
+    @classmethod
+    def for_e68_flash_success(
+        cls,
+        profile: ToolProfile,
+        *,
+        flash_driver_data: bytes,
+        app_data: bytes,
+    ) -> "FakeLinAdapter":
+        responses: list[tuple[int, bytes]] = []
+        nad = profile.bus.nad
+        response_id = profile.bus.response_id
+        app_seed = bytes.fromhex("35 79 24 68")
+        boot_seed = bytes.fromhex("24 68 35 79")
+
+        def add(payload: bytes) -> None:
+            responses.append((response_id, _lin_single(nad, payload)))
+
+        add(bytes.fromhex("50 01"))
+        add(bytes.fromhex("50 03"))
+        add(bytes.fromhex("67 01") + app_seed)
+        add(bytes.fromhex("67 02"))
+        add(bytes.fromhex("71 01 02 03 00"))
+        add(bytes.fromhex("50 02"))
+        add(bytes.fromhex("50 02"))
+        add(bytes.fromhex("67 09") + boot_seed)
+        add(bytes.fromhex("67 0A"))
+
+        add(bytes.fromhex("74 20 00 06"))
+        for block_sequence in _block_sequences(flash_driver_data, profile.uds.max_transfer_payload):
+            add(bytes([0x76, block_sequence]))
+        add(bytes([0x77]) + e68_crc32(flash_driver_data).to_bytes(4, "big"))
+        add(bytes.fromhex("71 01 02 02 00"))
+
+        add(bytes.fromhex("7F 31 78"))
+        add(bytes.fromhex("71 01 FF 00"))
+
+        add(bytes.fromhex("74 20 00 06"))
+        for block_sequence in _block_sequences(app_data, profile.uds.max_transfer_payload):
+            add(bytes([0x76, block_sequence]))
+        add(bytes([0x77]) + e68_crc32(app_data).to_bytes(4, "big"))
+        add(bytes.fromhex("71 01 FF 01 00"))
+        add(bytes.fromhex("51 01"))
+
+        return cls(responses=responses)
 
     def sent_uds_payloads(self) -> list[bytes]:
         payloads: list[bytes] = []
@@ -43,3 +90,17 @@ class FakeLinAdapter:
 
         return payloads
 
+
+def _lin_single(nad: int, payload: bytes) -> bytes:
+    if len(payload) > 6:
+        raise ValueError("fake LIN single-frame payload must be at most 6 bytes")
+    return bytes([nad, len(payload)]) + payload + bytes([0xFF] * (6 - len(payload)))
+
+
+def _block_sequences(data: bytes, max_payload: int) -> list[int]:
+    sequences: list[int] = []
+    block_sequence = 1
+    for _ in range(0, len(data), max_payload):
+        sequences.append(block_sequence)
+        block_sequence = (block_sequence + 1) & 0xFF
+    return sequences
