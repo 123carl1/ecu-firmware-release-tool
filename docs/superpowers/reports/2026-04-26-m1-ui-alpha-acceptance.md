@@ -38,7 +38,7 @@ $env:PYTHONPATH='src'; $env:QT_QPA_PLATFORM='offscreen'; python -m unittest disc
 结果：
 
 ```text
-Ran 37 tests
+Ran 38 tests
 OK
 ```
 

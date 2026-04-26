@@ -203,11 +203,20 @@ class MainWindow(QMainWindow):
 
     def _stop_active_threads(self) -> None:
         threads = list(self._active_threads)
+        running_threads: list[QThread] = []
         for thread in threads:
-            thread.requestInterruption()
-            thread.quit()
-        for thread in threads:
-            thread.wait(2000)
+            try:
+                if thread.isRunning():
+                    thread.requestInterruption()
+                    thread.quit()
+                    running_threads.append(thread)
+            except RuntimeError:
+                continue
+        for thread in running_threads:
+            try:
+                thread.wait(2000)
+            except RuntimeError:
+                continue
         self._active_threads.clear()
         self._active_workers.clear()
 

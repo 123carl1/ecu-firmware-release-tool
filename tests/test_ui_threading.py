@@ -78,6 +78,27 @@ class UiThreadingTest(unittest.TestCase):
                     thread.quit()
                     thread.wait(1000)
 
+    def test_main_window_close_tolerates_deleted_qthread_wrappers(self):
+        try:
+            import shiboken6
+            from PySide6.QtCore import QThread
+            from PySide6.QtWidgets import QApplication
+        except ModuleNotFoundError:
+            self.skipTest("PySide6 is not installed")
+
+        from unified_can_lin_host_tool.ui.main_window import MainWindow
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        thread = QThread()
+        window._active_threads.append(thread)
+        shiboken6.delete(thread)
+
+        window.close()
+        app.processEvents()
+
+        self.assertEqual(window._active_threads, [])
+
     def test_main_window_disables_flash_while_uds_worker_is_running(self):
         try:
             from PySide6.QtCore import QEventLoop, QTimer
