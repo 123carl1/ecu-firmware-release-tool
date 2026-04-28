@@ -9,7 +9,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only when UI deps ar
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.core.events import TraceEvent
 from unified_can_lin_host_tool.ui.main_window import MainWindow
-from unified_can_lin_host_tool.ui.models import WorkerEvent
+from unified_can_lin_host_tool.ui.models import UiChannel, WorkerEvent
 
 
 class MissingDllBackend:
@@ -76,6 +76,46 @@ class MainWindowBackendRegistryTest(unittest.TestCase):
         try:
             self.assertEqual(window.start_in_bootloader_check.text(), "目标已在 Bootloader")
             self.assertFalse(window.start_in_bootloader_check.isChecked())
+        finally:
+            window.close()
+
+    def test_flash_tab_declares_e68_lin_only(self):
+        window = MainWindow()
+
+        try:
+            self.assertEqual(window.flash_bus_guard_label.text(), "E68 LIN Bootloader 仅支持 LIN 通道刷写")
+        finally:
+            window.close()
+
+    def test_connected_status_describes_lin_session_not_target_connection(self):
+        window = MainWindow()
+
+        try:
+            window._backend_name = "TSMaster"
+            window._on_connected(object())
+
+            self.assertEqual(window.status_label.text(), "TSMaster LIN 会话已打开")
+            self.assertIn("TSMaster LIN 会话已打开", window.trace_log.toPlainText())
+        finally:
+            window.close()
+
+    def test_e68_flash_rejects_non_lin_channel(self):
+        window = MainWindow()
+
+        try:
+            window._session = object()
+            window._selected_channel = UiChannel(
+                vendor="TSMaster",
+                device_name="TC1016",
+                channel_name="CAN 0",
+                bus="CAN",
+                channel_index=0,
+            )
+
+            window._on_flash_start_clicked()
+
+            self.assertEqual(window.status_label.text(), "错误")
+            self.assertIn("E68 LIN Bootloader 仅支持 LIN 通道刷写", window.trace_log.toPlainText())
         finally:
             window.close()
 

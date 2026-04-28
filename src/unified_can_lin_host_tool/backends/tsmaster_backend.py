@@ -138,7 +138,7 @@ class TsmasterHostBackend:
                     UiChannel(
                         vendor="TSMaster",
                         device_name=device.name,
-                        channel_name=f"LIN {self.settings.app_channel}",
+                        channel_name=f"{device.name} 设备，默认 LIN 映射",
                         bus="LIN",
                         channel_index=self.settings.app_channel,
                         mapping={

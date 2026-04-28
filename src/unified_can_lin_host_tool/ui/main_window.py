@@ -184,6 +184,8 @@ class MainWindow(QMainWindow):
         self.flash_progress.setFormat("%p%")
         self.flash_status_label = QLabel("等待刷写")
         self.flash_status_label.setObjectName("flashStatusLabel")
+        self.flash_bus_guard_label = QLabel("E68 LIN Bootloader 仅支持 LIN 通道刷写")
+        self.flash_bus_guard_label.setObjectName("flashBusGuardLabel")
 
         form = QFormLayout()
         form.addRow("FlashDriver", _path_row(self.flash_driver_edit, self.flash_driver_browse_button))
@@ -191,6 +193,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(form)
         layout.addWidget(self.use_fixture_button)
         layout.addWidget(self.start_in_bootloader_check)
+        layout.addWidget(self.flash_bus_guard_label)
         layout.addWidget(self.flash_start_button)
         layout.addWidget(self.flash_status_label)
         layout.addWidget(self.flash_progress)
@@ -277,6 +280,10 @@ class MainWindow(QMainWindow):
                 min-height: 26px;
                 color: #0F172A;
                 font-weight: 600;
+                padding: 2px 0;
+            }
+            QLabel#flashBusGuardLabel {
+                color: #475569;
                 padding: 2px 0;
             }
             """
@@ -405,8 +412,8 @@ class MainWindow(QMainWindow):
     def _on_connected(self, session: HostSession) -> None:
         self._session = session
         self._set_connected(True)
-        self.status_label.setText("已连接")
-        self._append_log("INFO", f"{self._backend_name} LIN connected")
+        self.status_label.setText(f"{self._backend_name} LIN 会话已打开")
+        self._append_log("INFO", f"{self._backend_name} LIN 会话已打开")
 
     def _on_uds_send_clicked(self) -> None:
         if self._session is None:
@@ -452,6 +459,11 @@ class MainWindow(QMainWindow):
     def _on_flash_start_clicked(self) -> None:
         if self._session is None:
             self._show_error("请先连接通道")
+            return
+        if self._profile.name == "E68 LIN Bootloader" and (
+            self._selected_channel is None or self._selected_channel.bus != "LIN"
+        ):
+            self._show_error("E68 LIN Bootloader 仅支持 LIN 通道刷写")
             return
         self.flash_progress.setValue(0)
         self.flash_status_label.setText("准备刷写")

@@ -55,7 +55,7 @@ class TsmasterHostBackendTest(unittest.TestCase):
     def setUp(self):
         RecordingAdapter.probe_calls.clear()
 
-    def test_scan_exposes_real_tsmaster_lin_channel_mapping(self):
+    def test_scan_exposes_default_tsmaster_lin_mapping(self):
         settings = TsmasterSettings(project_dir="D:/project/TS_Master")
         backend = TsmasterHostBackend(settings=settings, adapter_cls=RecordingAdapter)
 
@@ -65,6 +65,7 @@ class TsmasterHostBackendTest(unittest.TestCase):
         self.assertEqual(devices[0].name, "TC1016")
         channel = devices[0].channels[0]
         self.assertEqual(channel.vendor, "TSMaster")
+        self.assertEqual(channel.channel_name, "TC1016 设备，默认 LIN 映射")
         self.assertEqual(channel.mapping["project_dir"], "D:/project/TS_Master")
         self.assertEqual(channel.mapping["hw_name"], "TC1016")
         self.assertEqual(channel.mapping["hw_channel"], 0)
