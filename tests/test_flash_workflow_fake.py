@@ -168,6 +168,27 @@ class FlashWorkflowFakeTests(unittest.TestCase):
         transfer_lengths = [len(req) for req in transport.requests if req.startswith(bytes([0x36]))]
         self.assertEqual(transfer_lengths[-3:], [1026, 1026, 4])
 
+    def test_erased_app_nrc22_falls_back_to_direct_boot_programming(self):
+        session = BusSession()
+        transport = BootAlreadyRunningAfterAppNrc22Transport(self.profile)
+        progress_events = []
+        workflow = FlashWorkflow(
+            self.profile,
+            transport,
+            session,
+            sleep_func=lambda _: None,
+            progress_callback=progress_events.append,
+        )
+
+        result = workflow.run(flash_driver=self.flash_driver, app=self.app)
+
+        self.assertTrue(result.success)
+        self.assertFalse(session.is_diag_exclusive)
+        self.assertIn(bytes.fromhex("10 02"), transport.requests)
+        self.assertIn(bytes.fromhex("27 09"), transport.requests)
+        self.assertNotIn(bytes.fromhex("31 01 02 03"), transport.requests)
+        self.assertTrue(any("尝试直接连接 Bootloader" in event.message for event in progress_events))
+
 
 class BootDelayedTransport:
     def __init__(self, profile):
@@ -234,3 +255,31 @@ class BootDelayedTransport:
             return UdsResponse(payload=bytes.fromhex("62 30 00 30 30 30"), raw_frames=())
 
         raise AssertionError(f"unexpected UDS request: {uds_payload.hex(' ')}")
+
+
+class BootAlreadyRunningAfterAppNrc22Transport(BootDelayedTransport):
+    def request(
+        self,
+        uds_payload: bytes,
+        *,
+        expect_sid=None,
+        expect_prefix=None,
+        timeout_ms=None,
+        allow_response_pending=False,
+        cancel_token=None,
+    ):
+        if uds_payload == bytes.fromhex("27 01"):
+            self.requests.append(uds_payload)
+            raise HostToolError(ErrorCategory.UDS, "received NRC 0x22")
+        if uds_payload == bytes.fromhex("10 02"):
+            self.requests.append(uds_payload)
+            self.boot_session_attempts += 1
+            return UdsResponse(payload=bytes.fromhex("50 02"), raw_frames=())
+        return super().request(
+            uds_payload,
+            expect_sid=expect_sid,
+            expect_prefix=expect_prefix,
+            timeout_ms=timeout_ms,
+            allow_response_pending=allow_response_pending,
+            cancel_token=cancel_token,
+        )
