@@ -168,7 +168,18 @@ class FlashWorkflowFakeTests(unittest.TestCase):
         transfer_lengths = [len(req) for req in transport.requests if req.startswith(bytes([0x36]))]
         self.assertEqual(transfer_lengths[-3:], [1026, 1026, 4])
 
-    def test_erased_app_nrc22_falls_back_to_direct_boot_programming(self):
+    def test_erased_app_nrc22_without_boot_start_mode_fails(self):
+        session = BusSession()
+        transport = BootAlreadyRunningAfterAppNrc22Transport(self.profile)
+        workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
+
+        with self.assertRaisesRegex(HostToolError, "NRC 0x22"):
+            workflow.run(flash_driver=self.flash_driver, app=self.app)
+
+        self.assertFalse(session.is_diag_exclusive)
+        self.assertNotIn(bytes.fromhex("27 09"), transport.requests)
+
+    def test_start_in_bootloader_skips_app_preprogramming(self):
         session = BusSession()
         transport = BootAlreadyRunningAfterAppNrc22Transport(self.profile)
         progress_events = []
@@ -180,14 +191,15 @@ class FlashWorkflowFakeTests(unittest.TestCase):
             progress_callback=progress_events.append,
         )
 
-        result = workflow.run(flash_driver=self.flash_driver, app=self.app)
+        result = workflow.run(flash_driver=self.flash_driver, app=self.app, start_in_bootloader=True)
 
         self.assertTrue(result.success)
         self.assertFalse(session.is_diag_exclusive)
         self.assertIn(bytes.fromhex("10 02"), transport.requests)
         self.assertIn(bytes.fromhex("27 09"), transport.requests)
+        self.assertNotIn(bytes.fromhex("27 01"), transport.requests)
         self.assertNotIn(bytes.fromhex("31 01 02 03"), transport.requests)
-        self.assertTrue(any("尝试直接连接 Bootloader" in event.message for event in progress_events))
+        self.assertTrue(any("从 Bootloader 开始" in event.message for event in progress_events))
 
 
 class BootDelayedTransport:

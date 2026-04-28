@@ -31,6 +31,7 @@ class FakeLinAdapter:
         *,
         flash_driver_data: bytes,
         app_data: bytes,
+        start_in_bootloader: bool = False,
     ) -> "FakeLinAdapter":
         responses: list[tuple[int, bytes]] = []
         nad = profile.bus.nad
@@ -41,12 +42,13 @@ class FakeLinAdapter:
         def add(payload: bytes) -> None:
             responses.append((response_id, _lin_single(nad, payload)))
 
-        add(bytes.fromhex("50 01"))
-        add(bytes.fromhex("50 03"))
-        add(bytes.fromhex("67 01") + app_seed)
-        add(bytes.fromhex("67 02"))
-        add(bytes.fromhex("71 01 02 03 00"))
-        add(bytes.fromhex("50 02"))
+        if not start_in_bootloader:
+            add(bytes.fromhex("50 01"))
+            add(bytes.fromhex("50 03"))
+            add(bytes.fromhex("67 01") + app_seed)
+            add(bytes.fromhex("67 02"))
+            add(bytes.fromhex("71 01 02 03 00"))
+            add(bytes.fromhex("50 02"))
         add(bytes.fromhex("50 02"))
         add(bytes.fromhex("67 09") + boot_seed)
         add(bytes.fromhex("67 0A"))

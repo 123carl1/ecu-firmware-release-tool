@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Qt
 from PySide6.QtGui import QCloseEvent, QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -173,6 +174,8 @@ class MainWindow(QMainWindow):
         self.app_browse_button.clicked.connect(self._on_browse_app_clicked)
         self.use_fixture_button = QPushButton("使用测试 fixture")
         self.use_fixture_button.clicked.connect(self._on_use_fixture_clicked)
+        self.start_in_bootloader_check = QCheckBox("目标已在 Bootloader")
+        self.start_in_bootloader_check.setToolTip("App 已擦除或目标已停在 Bootloader 时启用，跳过 App 解锁和 App 跳转步骤。")
         self.flash_start_button = QPushButton("开始刷写")
         self.flash_start_button.clicked.connect(self._on_flash_start_clicked)
         self.flash_progress = QProgressBar()
@@ -187,6 +190,7 @@ class MainWindow(QMainWindow):
         form.addRow("App", _path_row(self.app_edit, self.app_browse_button))
         layout.addLayout(form)
         layout.addWidget(self.use_fixture_button)
+        layout.addWidget(self.start_in_bootloader_check)
         layout.addWidget(self.flash_start_button)
         layout.addWidget(self.flash_status_label)
         layout.addWidget(self.flash_progress)
@@ -460,6 +464,7 @@ class MainWindow(QMainWindow):
             app_path=Path(self.app_edit.text()),
             log_dir=Path("logs"),
             dry_run=self._backend_name == "Fake",
+            start_in_bootloader=self.start_in_bootloader_check.isChecked(),
         )
         worker.event.connect(self._on_worker_event)
         worker.failed.connect(self._show_error)

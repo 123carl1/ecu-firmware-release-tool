@@ -56,6 +56,7 @@ class TsmasterHostSession:
         app_path: Path,
         log_dir: Path,
         dry_run: bool = True,
+        start_in_bootloader: bool = False,
         on_event: EventCallback | None = None,
         cancel_token: CancellationToken | None = None,
     ) -> list[WorkerEvent]:
@@ -95,7 +96,12 @@ class TsmasterHostSession:
                     WorkerEvent(kind="progress", message=progress.message, progress=progress.percent)
                 ),
             )
-            result = workflow.run(flash_driver=flash_driver, app=app, cancel_token=cancel_token)
+            result = workflow.run(
+                flash_driver=flash_driver,
+                app=app,
+                start_in_bootloader=start_in_bootloader,
+                cancel_token=cancel_token,
+            )
             if result.success:
                 emit(WorkerEvent(kind="progress", message="Flash workflow completed", progress=100))
                 emit(WorkerEvent(kind="result", message="FLASH SUCCESS", progress=100))

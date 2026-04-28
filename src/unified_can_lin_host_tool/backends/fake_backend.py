@@ -73,6 +73,7 @@ class FakeHostSession:
         app_path: Path,
         log_dir: Path,
         dry_run: bool = True,
+        start_in_bootloader: bool = False,
         on_event: EventCallback | None = None,
         cancel_token: CancellationToken | None = None,
     ) -> list[WorkerEvent]:
@@ -105,6 +106,7 @@ class FakeHostSession:
                 self.profile,
                 flash_driver_data=flash_driver.data,
                 app_data=app.data,
+                start_in_bootloader=start_in_bootloader,
             )
             bridge = TraceEventBridge(trace_logger, emit)
             transport = LinDiagTransport(adapter, self.profile, sleep_func=lambda _: None, trace_logger=bridge)
@@ -119,7 +121,12 @@ class FakeHostSession:
 
             message = "Fake flash workflow running" if dry_run else "Fake flash workflow running without hardware"
             emit(WorkerEvent(kind="progress", message=message, progress=9))
-            result = workflow.run(flash_driver=flash_driver, app=app, cancel_token=cancel_token)
+            result = workflow.run(
+                flash_driver=flash_driver,
+                app=app,
+                start_in_bootloader=start_in_bootloader,
+                cancel_token=cancel_token,
+            )
             if result.success:
                 emit(WorkerEvent(kind="progress", message="Flash workflow completed", progress=100))
                 emit(WorkerEvent(kind="result", message="FLASH SUCCESS", progress=100))

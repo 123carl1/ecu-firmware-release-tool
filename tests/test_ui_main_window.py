@@ -70,6 +70,15 @@ class MainWindowBackendRegistryTest(unittest.TestCase):
         finally:
             window.close()
 
+    def test_flash_tab_has_explicit_bootloader_start_checkbox(self):
+        window = MainWindow()
+
+        try:
+            self.assertEqual(window.start_in_bootloader_check.text(), "目标已在 Bootloader")
+            self.assertFalse(window.start_in_bootloader_check.isChecked())
+        finally:
+            window.close()
+
     def test_flash_progress_log_is_separate_from_raw_trace(self):
         window = MainWindow()
 

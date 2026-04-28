@@ -51,6 +51,7 @@ class FlashWorkflow:
         *,
         flash_driver: FirmwareImage,
         app: FirmwareImage,
+        start_in_bootloader: bool = False,
         cancel_token: CancellationToken | None = None,
     ) -> FlashResult:
         if not self._session.enter_diag_exclusive("flash"):
@@ -59,12 +60,10 @@ class FlashWorkflow:
         try:
             self._check_cancel(cancel_token)
             self._emit_progress(5, "准备刷写", "开始 E68 OTA 流程")
-            try:
+            if start_in_bootloader:
+                self._emit_progress(30, "等待 Boot", "从 Bootloader 开始，跳过 App 预编程")
+            else:
                 self._run_app_preprogramming(cancel_token)
-            except HostToolError as exc:
-                if not _is_conditions_not_correct(exc):
-                    raise
-                self._emit_progress(30, "等待 Boot", "App 预编程返回 NRC 0x22，尝试直接连接 Bootloader")
             self._run_boot_programming(flash_driver=flash_driver, app=app, cancel_token=cancel_token)
             self._emit_progress(100, "完成", "FLASH SUCCESS")
             return FlashResult(success=True)
@@ -345,7 +344,3 @@ def _scale_progress(start: int, end: int, current: int, total: int) -> int:
     if total <= 0:
         return start
     return start + int((end - start) * current / total)
-
-
-def _is_conditions_not_correct(exc: HostToolError) -> bool:
-    return exc.category == ErrorCategory.UDS and "NRC 0x22" in exc.message

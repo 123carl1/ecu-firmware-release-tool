@@ -32,6 +32,7 @@ class HostSession(Protocol):
         app_path: Path,
         log_dir: Path,
         dry_run: bool = True,
+        start_in_bootloader: bool = False,
         on_event: EventCallback | None = None,
         cancel_token: CancellationToken | None = None,
     ) -> list[WorkerEvent]:

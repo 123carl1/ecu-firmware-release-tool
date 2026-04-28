@@ -275,7 +275,7 @@ memory:
 uds:
   p2_ms: 50
   p2_star_ms: 5000
-  max_transfer_payload: 6
+  max_transfer_payload: 1024
   request_download_format: 0x44
   frame_gap_ms: 12
   poll_timeout_ms: 300
@@ -420,13 +420,14 @@ logs/2026-04-26/195000_e68_lin_bootloader_usb2xxx_lin1.log
 3. App Level1 安全访问：发送 `$27 01` 获取 4 字节 Seed，计算 Key 后发送 `$27 02 + Key`，期望 `$67 02`。
 4. App 预编程检查：发送 `$31 01 02 03`，期望 `$71 01 02 03 00`。
 5. App 进入编程会话：发送 `$10 02`，期望 `$50 02`；App 响应发出后写 Boot 请求标志并复位。
+   - 如果 App 已擦除或目标已人工停在 Bootloader，必须显式启用 `start_in_bootloader` / `--start-in-bootloader`，跳过步骤 1..5。
 6. 等待 Boot 响应。上位机应在窗口期内轮询 Boot 编程会话请求。
 7. Boot 编程会话：发送 `$10 02`，期望 `$50 02`。
 8. Boot FBL 安全访问：发送 `$27 09` 获取 Seed，计算 Key 后发送 `$27 0A + Key`，期望 `$67 0A`。
 9. FlashDriver 下载：
    - 发送 `$34 00 44 + flashDriverAddr32 + flashDriverSize32`。
-   - 期望 `$74 20 00 06` 或等价最大块长响应。
-   - 按 6 字节以内有效数据发送多次 `$36 blockSequence + data`。
+   - 期望 `$74 20 04 02`，其中 `0x0402` 表示 `$36` UDS 请求总长最大 1026 字节。
+   - 按 1024 字节以内数据区发送多次 `$36 blockSequence + data`；LIN TP 负责拆成 1 个首帧和若干连续帧。
    - 每块期望 `$76 blockSequence`。
    - 发送 `$37 + CRC32`。
    - 期望 `$77 + CRC32`。
@@ -437,7 +438,7 @@ logs/2026-04-26/195000_e68_lin_bootloader_usb2xxx_lin1.log
    - 持续轮询响应，直到收到 `$71 01 FF 00` 或超时。
 12. App 下载：
    - 发送 `$34 00 44 + appStart32 + appSize32`。
-   - 按 6 字节以内有效数据发送 `$36`。
+   - 按 1024 字节以内数据区发送 `$36`，也就是每个完整 `$36` 请求 UDS 长度为 1026 字节。
    - 发送 `$37 + CRC32`。
    - 期望 `$77 + CRC32`。
 13. App 完整性检查：发送 `$31 01 FF 01`，期望 `$71 01 FF 01 00`。
@@ -450,7 +451,7 @@ logs/2026-04-26/195000_e68_lin_bootloader_usb2xxx_lin1.log
 2. NAD 固定为 `0x02`。
 3. Boot 侧 LIN 诊断支持单帧和请求多帧；响应当前为单帧，最大 UDS 响应载荷 6 字节。
 4. `$34` 格式固定为 `34 00 44 + addr32 + size32`。
-5. `$36` 每块请求 UDS 负载长度必须在 `3..8`，即有效数据最多 6 字节。
+5. `$36` 每块请求 UDS 负载长度最大为 `0x0402`，其中 2 字节为 SID 和块序号，数据区最多 1024 字节。
 6. `$36` 块序号从 `0x01` 开始，`0xFF` 后回绕到 `0x00`。
 7. `$37` CRC32 初始值为 `0xFFFFFFFF`，只覆盖 `$36` 数据区，不包含块序号。
 8. App 擦除长度必须按 512B 页对齐。

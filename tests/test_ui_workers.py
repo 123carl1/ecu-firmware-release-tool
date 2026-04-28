@@ -19,6 +19,15 @@ class CancellingSession:
         raise OperationCancelled("operation cancelled")
 
 
+class RecordingSession:
+    def __init__(self):
+        self.start_in_bootloader = None
+
+    def flash_e68(self, *args, **kwargs):
+        self.start_in_bootloader = kwargs["start_in_bootloader"]
+        return []
+
+
 class WorkerCancellationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -37,6 +46,21 @@ class WorkerCancellationTest(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(events[-1].kind, "cancelled")
         self.assertEqual(events[-1].message, "operation cancelled")
+
+    def test_flash_worker_passes_start_in_bootloader_to_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = RecordingSession()
+            worker = FlashWorker(
+                session,
+                flash_driver_path=Path("tests/fixtures/flash_driver_18b.bin"),
+                app_path=Path("tests/fixtures/app_20b.bin"),
+                log_dir=Path(tmp),
+                start_in_bootloader=True,
+            )
+
+            worker.run()
+
+        self.assertTrue(session.start_in_bootloader)
 
     def test_flash_worker_reports_cancelled_event_instead_of_failed(self):
         with tempfile.TemporaryDirectory() as tmp:

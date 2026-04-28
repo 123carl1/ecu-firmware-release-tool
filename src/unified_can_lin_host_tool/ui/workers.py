@@ -98,6 +98,7 @@ class FlashWorker(QObject):
         app_path: Path,
         log_dir: Path,
         dry_run: bool = True,
+        start_in_bootloader: bool = False,
     ) -> None:
         super().__init__()
         self._session = session
@@ -105,6 +106,7 @@ class FlashWorker(QObject):
         self._app_path = app_path
         self._log_dir = log_dir
         self._dry_run = dry_run
+        self._start_in_bootloader = start_in_bootloader
         self._cancel_token = CancellationToken()
 
     def cancel(self) -> None:
@@ -118,6 +120,7 @@ class FlashWorker(QObject):
                 app_path=self._app_path,
                 log_dir=self._log_dir,
                 dry_run=self._dry_run,
+                start_in_bootloader=self._start_in_bootloader,
                 on_event=self.event.emit,
                 cancel_token=self._cancel_token,
             )

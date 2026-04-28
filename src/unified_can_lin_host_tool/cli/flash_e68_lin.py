@@ -23,6 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-dir", type=Path, default=Path("logs"))
     parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
     parser.add_argument("--no-dry-run", dest="dry_run", action="store_false")
+    parser.add_argument(
+        "--start-in-bootloader",
+        action="store_true",
+        help="目标已停在 Bootloader 时跳过 App 预编程、App 解锁和 App 跳转步骤。",
+    )
     parser.add_argument("--tsmaster-dll", "--dll", dest="tsmaster_dll", default=DEFAULT_TSMASTER_DLL)
     parser.add_argument("--tsmaster-app", default="Codex_UnifiedHostTool")
     parser.add_argument("--tsmaster-project-dir", type=Path, default=None)
@@ -58,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"adapter={args.adapter}")
         print(f"flash_driver={flash_driver.path} start=0x{flash_driver.start_address:08X} size={flash_driver.size}")
         print(f"app={app.path} start=0x{app.start_address:08X} size={app.size}")
+        print(f"start_in_bootloader={args.start_in_bootloader}")
         if args.adapter == "tsmaster":
             _print_tsmaster_mapping(args)
 
@@ -71,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
                 profile,
                 flash_driver_data=flash_driver.data,
                 app_data=app.data,
+                start_in_bootloader=args.start_in_bootloader,
             )
             sleep_func = lambda _: None
         else:
@@ -98,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             **({"sleep_func": sleep_func} if sleep_func is not None else {}),
         )
         workflow = FlashWorkflow(profile, transport, BusSession())
-        workflow.run(flash_driver=flash_driver, app=app)
+        workflow.run(flash_driver=flash_driver, app=app, start_in_bootloader=args.start_in_bootloader)
         print("FLASH SUCCESS")
         print(f"log={trace_logger.path}")
         return 0
