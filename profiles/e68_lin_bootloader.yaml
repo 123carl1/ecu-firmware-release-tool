@@ -15,7 +15,7 @@ memory:
 uds:
   p2_ms: 50
   p2_star_ms: 5000
-  max_transfer_payload: 6
+  max_transfer_payload: 1024
   request_download_format: 0x44
   frame_gap_ms: 12
   poll_timeout_ms: 300

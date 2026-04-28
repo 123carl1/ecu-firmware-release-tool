@@ -150,8 +150,11 @@ def _validate_profile(profile: ToolProfile) -> None:
         raise HostToolError(ErrorCategory.PROFILE, "memory app range is inconsistent")
     if profile.memory.page_size <= 0:
         raise HostToolError(ErrorCategory.PROFILE, "memory.page_size must be positive")
-    if profile.uds.max_transfer_payload != 6:
-        raise HostToolError(ErrorCategory.PROFILE, "uds.max_transfer_payload must be 6 for E68 LIN")
+    if not 1 <= profile.uds.max_transfer_payload <= (0xFFF - 2):
+        raise HostToolError(
+            ErrorCategory.PROFILE,
+            "uds.max_transfer_payload must fit LIN ISO-TP 12-bit length after SID and block sequence",
+        )
     if profile.seedkey.app_level1 != "e68_level1":
         raise HostToolError(ErrorCategory.PROFILE, "seedkey.app_level1 must be e68_level1")
     if profile.seedkey.boot_fbl != "e68_fbl":
@@ -163,4 +166,3 @@ def _validate_profile(profile: ToolProfile) -> None:
 def _validate_byte(name: str, value: int) -> None:
     if not 0 <= value <= 0xFF:
         raise HostToolError(ErrorCategory.PROFILE, f"{name} must be in 0x00..0xFF")
-

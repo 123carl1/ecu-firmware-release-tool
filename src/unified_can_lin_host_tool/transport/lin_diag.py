@@ -12,6 +12,7 @@ from unified_can_lin_host_tool.trace import TraceLogger
 from unified_can_lin_host_tool.transport.base import BusAdapter, LinFrame
 
 SleepFunc = Callable[[float], None]
+LIN_SINGLE_FRAME_UDS_PAYLOAD_MAX = 6
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,7 @@ class LinDiagTransport:
         )
 
     def _build_request_frames(self, uds_payload: bytes) -> list[bytes]:
-        if len(uds_payload) <= self._profile.uds.max_transfer_payload:
+        if len(uds_payload) <= LIN_SINGLE_FRAME_UDS_PAYLOAD_MAX:
             return [_pad(bytes([self._profile.bus.nad, len(uds_payload)]) + uds_payload)]
 
         if len(uds_payload) > 0xFFF:
