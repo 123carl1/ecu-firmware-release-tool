@@ -59,8 +59,10 @@ class FakeLinAdapter:
         for block_sequence in _block_sequences(app_data, profile.uds.max_transfer_payload):
             add(bytes([0x76, block_sequence]))
         add(bytes([0x77]) + e68_crc32(app_data).to_bytes(4, "big"))
+        add(bytes.fromhex("7F 31 78"))
         add(bytes.fromhex("71 01 FF 01 00"))
         add(bytes.fromhex("51 01"))
+        add(bytes.fromhex("62 30 00 30 30 30"))
 
         return cls(responses=responses)
 

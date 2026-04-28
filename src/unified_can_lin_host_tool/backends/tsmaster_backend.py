@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from unified_can_lin_host_tool.adapters.fake import FakeLinAdapter
+from unified_can_lin_host_tool.adapters.tsmaster import TsmasterAdapter
+from unified_can_lin_host_tool.backends.fake_backend import TraceEventBridge
+from unified_can_lin_host_tool.backends.settings import TsmasterSettings
 from unified_can_lin_host_tool.core.cancel import CancellationToken
-from unified_can_lin_host_tool.core.events import TraceEvent
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.core.session import BusSession
 from unified_can_lin_host_tool.e68.flash_workflow import FlashWorkflow
@@ -18,24 +19,13 @@ from unified_can_lin_host_tool.ui.models import UiChannel, UiDevice, WorkerEvent
 EventCallback = Callable[[WorkerEvent], None]
 
 
-class TraceEventBridge:
-    def __init__(self, logger: TraceLogger | None, emit: EventCallback | None) -> None:
-        self._logger = logger
-        self._emit = emit
-
-    def write(self, event: TraceEvent) -> None:
-        if self._logger is not None:
-            self._logger.write(event)
-        if self._emit is not None:
-            self._emit(WorkerEvent(kind="trace", message="LIN frame", trace=event))
-
-
-class FakeHostSession:
-    def __init__(self, profile: ToolProfile) -> None:
+class TsmasterHostSession:
+    def __init__(self, *, profile: ToolProfile, adapter, close_mode: str = "skip") -> None:
         self.profile = profile
+        self.adapter = adapter
+        self.close_mode = close_mode
         self.bus_session = BusSession()
-        self.adapter = FakeLinAdapter()
-        self.transport = LinDiagTransport(self.adapter, profile)
+        self.transport = LinDiagTransport(adapter, profile)
 
     def request_uds(
         self,
@@ -51,16 +41,9 @@ class FakeHostSession:
 
         trace_logger = TraceLogger(log_dir) if log_dir is not None else None
         try:
-            _throw_if_cancelled(cancel_token)
-            response_payload = _manual_uds_response(payload)
-            self.adapter = FakeLinAdapter(
-                responses=[
-                    (self.profile.bus.response_id, _lin_single(self.profile.bus.nad, response_payload)),
-                ]
-            )
-            trace_bridge = TraceEventBridge(trace_logger, on_event) if trace_logger is not None or on_event is not None else None
-            self.transport = LinDiagTransport(self.adapter, self.profile, trace_logger=trace_bridge)
-            return self.transport.request(payload, cancel_token=cancel_token).payload
+            bridge = TraceEventBridge(trace_logger, on_event) if trace_logger is not None or on_event is not None else None
+            transport = LinDiagTransport(self.adapter, self.profile, trace_logger=bridge)
+            return transport.request(payload, cancel_token=cancel_token).payload
         finally:
             if trace_logger is not None:
                 trace_logger.close()
@@ -87,27 +70,23 @@ class FakeHostSession:
         emit(WorkerEvent(kind="started", message="E68 flash started", progress=0))
         trace_logger = TraceLogger(log_dir)
         try:
-            _throw_if_cancelled(cancel_token)
             flash_driver = load_firmware_image(
                 flash_driver_path,
                 start_address=self.profile.memory.flash_driver_ram,
                 max_size=self.profile.memory.flash_driver_max_size,
             )
-            _throw_if_cancelled(cancel_token)
             app = load_firmware_image(
                 app_path,
                 start_address=self.profile.memory.app_start,
                 max_size=self.profile.memory.app_size,
             )
             emit(WorkerEvent(kind="progress", message="镜像加载完成", progress=8))
+            if dry_run:
+                emit(WorkerEvent(kind="result", message="DRY RUN", progress=100))
+                return events
 
-            adapter = FakeLinAdapter.for_e68_flash_success(
-                self.profile,
-                flash_driver_data=flash_driver.data,
-                app_data=app.data,
-            )
             bridge = TraceEventBridge(trace_logger, emit)
-            transport = LinDiagTransport(adapter, self.profile, sleep_func=lambda _: None, trace_logger=bridge)
+            transport = LinDiagTransport(self.adapter, self.profile, trace_logger=bridge)
             workflow = FlashWorkflow(
                 self.profile,
                 transport,
@@ -116,9 +95,6 @@ class FakeHostSession:
                     WorkerEvent(kind="progress", message=progress.message, progress=progress.percent)
                 ),
             )
-
-            message = "Fake flash workflow running" if dry_run else "Fake flash workflow running without hardware"
-            emit(WorkerEvent(kind="progress", message=message, progress=9))
             result = workflow.run(flash_driver=flash_driver, app=app, cancel_token=cancel_token)
             if result.success:
                 emit(WorkerEvent(kind="progress", message="Flash workflow completed", progress=100))
@@ -128,76 +104,82 @@ class FakeHostSession:
             trace_logger.close()
 
     def close(self) -> None:
-        pass
+        if self.close_mode == "skip":
+            return
+        self.adapter.close()
 
 
-class FakeHostBackend:
-    name = "Fake"
+class TsmasterHostBackend:
+    name = "TSMaster"
+
+    def __init__(self, *, settings: TsmasterSettings | None = None, adapter_cls=TsmasterAdapter) -> None:
+        self.settings = settings or TsmasterSettings()
+        self.adapter_cls = adapter_cls
 
     def scan(self) -> list[UiDevice]:
+        devices = self.adapter_cls.probe(
+            dll_path=self.settings.dll_path,
+            app_name=f"{self.settings.app_name}_Probe",
+        )
+        if self.settings.hw_name:
+            devices = [device for device in devices if device.name == self.settings.hw_name]
         return [
             UiDevice(
                 vendor="TSMaster",
-                name="Fake TSMaster",
-                serial="FAKE-TS-001",
+                name=device.name,
+                serial=device.serial,
                 channels=[
                     UiChannel(
                         vendor="TSMaster",
-                        device_name="Fake TSMaster",
-                        channel_name="LIN 0",
+                        device_name=device.name,
+                        channel_name=f"LIN {self.settings.app_channel}",
                         bus="LIN",
-                        channel_index=0,
+                        channel_index=self.settings.app_channel,
                         mapping={
-                            "app_channel": 0,
-                            "hw_name": "FAKE-TS",
-                            "hw_index": 0,
-                            "hw_channel": 0,
+                            "dll_path": self.settings.dll_path,
+                            "app_name": self.settings.app_name,
+                            "project_dir": self.settings.project_dir,
+                            "app_channel": self.settings.app_channel,
+                            "hw_name": self.settings.hw_name,
+                            "hw_subtype": self.settings.hw_subtype,
+                            "hw_index": device.device_index,
+                            "hw_channel": self.settings.hw_channel,
+                            "close_mode": self.settings.close_mode,
                         },
                         capabilities=("lin_raw", "lin_diag", "e68_flash"),
                     )
                 ],
-            ),
-            UiDevice(
-                vendor="USB2XXX",
-                name="Fake USB2XXX",
-                serial="FAKE-USB2-001",
-                channels=[
-                    UiChannel(
-                        vendor="USB2XXX",
-                        device_name="Fake USB2XXX",
-                        channel_name="LIN 0",
-                        bus="LIN",
-                        channel_index=0,
-                        mapping={
-                            "device_index": 0,
-                            "channel_index": 0,
-                        },
-                        capabilities=("lin_raw", "lin_diag", "e68_flash"),
-                    )
-                ],
-            ),
+            )
+            for device in devices
         ]
 
-    def connect(self, channel: UiChannel, profile: ToolProfile) -> FakeHostSession:
+    def connect(self, channel: UiChannel, profile: ToolProfile) -> TsmasterHostSession:
         if channel.bus != "LIN":
-            raise ValueError("fake backend only supports LIN in M1 Alpha")
-        return FakeHostSession(profile)
+            raise ValueError("TSMaster backend only supports LIN in M1 Alpha")
+        mapping = channel.mapping
+        adapter = self.adapter_cls(
+            dll_path=str(mapping.get("dll_path", self.settings.dll_path)),
+            app_name=str(mapping.get("app_name", self.settings.app_name)),
+            project_dir=_optional_path(mapping.get("project_dir", self.settings.project_dir)),
+            app_channel=int(mapping.get("app_channel", self.settings.app_channel)),
+            hw_name=str(mapping.get("hw_name", self.settings.hw_name)),
+            hw_subtype=int(mapping.get("hw_subtype", self.settings.hw_subtype)),
+            hw_index=int(mapping.get("hw_index", self.settings.hw_index)),
+            hw_channel=int(mapping.get("hw_channel", self.settings.hw_channel)),
+            baud_kbps=profile.bus.baudrate / 1000.0,
+        )
+        adapter.open_lin()
+        return TsmasterHostSession(
+            profile=profile,
+            adapter=adapter,
+            close_mode=str(mapping.get("close_mode", self.settings.close_mode)),
+        )
 
 
-def _lin_single(nad: int, payload: bytes) -> bytes:
-    if len(payload) > 6:
-        raise ValueError("fake LIN single-frame payload must be at most 6 bytes")
-    return bytes([nad, len(payload)]) + payload + bytes([0xFF] * (6 - len(payload)))
-
-
-def _manual_uds_response(payload: bytes) -> bytes:
-    if payload == bytes.fromhex("10 01"):
-        return bytes.fromhex("50 01")
-    if payload == bytes.fromhex("10 03"):
-        return bytes.fromhex("50 03")
-    if payload == bytes.fromhex("27 01"):
-        return bytes.fromhex("67 01 35 79 24 68")
-    raise HostToolError(ErrorCategory.UDS, f"fake UDS request is not supported: {payload.hex(' ')}")
+def _optional_path(value) -> Path | None:
+    if value is None or value == "":
+        return None
+    return Path(str(value))
 
 
 def _throw_if_cancelled(cancel_token: CancellationToken | None) -> None:

@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -25,9 +26,16 @@ from PySide6.QtWidgets import (
 from unified_can_lin_host_tool.backends.base import HostBackend, HostSession
 from unified_can_lin_host_tool.backends.fake_backend import FakeHostBackend
 from unified_can_lin_host_tool.backends.settings import BackendSettings, default_backend_settings
+from unified_can_lin_host_tool.backends.tsmaster_backend import TsmasterHostBackend
 from unified_can_lin_host_tool.profile import load_profile
 from unified_can_lin_host_tool.ui.models import UiChannel, UiDevice, WorkerEvent
 from unified_can_lin_host_tool.ui.workers import ConnectWorker, DeviceScanWorker, FlashWorker, UdsWorker
+
+DEFAULT_FLASH_DRIVER_PATH = Path(
+    "D:/01_WorkProgram/Company_Program/10_AI_Adapted_Seat/DAU_FM33_HT/artifacts/release/e68_flash_driver_auth.s19"
+)
+DEFAULT_APP_PATH = Path("D:/01_WorkProgram/Company_Program/10_AI_Adapted_Seat/DAU_FM33_HT/artifacts/release/dau_fm33_auth.s19")
+FIRMWARE_FILE_FILTER = "S19 Files (*.s19 *.srec *.mot);;Binary Files (*.bin);;All Files (*)"
 
 
 class MainWindow(QMainWindow):
@@ -43,12 +51,15 @@ class MainWindow(QMainWindow):
 
         self._backend_settings = backend_settings or default_backend_settings()
         if backends is None:
-            self._backends = {"Fake": FakeHostBackend()}
+            self._backends = {
+                "TSMaster": TsmasterHostBackend(settings=self._backend_settings.tsmaster),
+                "Fake": FakeHostBackend(),
+            }
         else:
             self._backends = backends
         if not self._backends:
             raise ValueError("at least one backend must be registered")
-        self._backend_name = "Fake" if "Fake" in self._backends else next(iter(self._backends))
+        self._backend_name = _default_backend_name(self._backends)
         self._backend = self._backends[self._backend_name]
         self._profile_path = Path("profiles/e68_lin_bootloader.yaml")
         self._profile = load_profile(self._profile_path)
@@ -58,6 +69,7 @@ class MainWindow(QMainWindow):
         self._active_workers: list[QObject] = []
 
         self._build_ui()
+        self._apply_style()
         self._set_connected(False)
         self._append_log("INFO", "UI ready")
 
@@ -152,23 +164,35 @@ class MainWindow(QMainWindow):
     def _build_flash_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        self.flash_driver_edit = QLineEdit("tests/fixtures/flash_driver_18b.bin")
-        self.app_edit = QLineEdit("tests/fixtures/app_20b.bin")
+        self.flash_driver_edit = QLineEdit(str(DEFAULT_FLASH_DRIVER_PATH))
+        self.app_edit = QLineEdit(str(DEFAULT_APP_PATH))
+        self.firmware_file_filter = FIRMWARE_FILE_FILTER
+        self.flash_driver_browse_button = QPushButton("浏览...")
+        self.flash_driver_browse_button.clicked.connect(self._on_browse_flash_driver_clicked)
+        self.app_browse_button = QPushButton("浏览...")
+        self.app_browse_button.clicked.connect(self._on_browse_app_clicked)
         self.use_fixture_button = QPushButton("使用测试 fixture")
         self.use_fixture_button.clicked.connect(self._on_use_fixture_clicked)
         self.flash_start_button = QPushButton("开始刷写")
         self.flash_start_button.clicked.connect(self._on_flash_start_clicked)
         self.flash_progress = QProgressBar()
+        self.flash_progress.setRange(0, 100)
+        self.flash_progress.setTextVisible(True)
+        self.flash_progress.setFormat("%p%")
+        self.flash_status_label = QLabel("等待刷写")
+        self.flash_status_label.setObjectName("flashStatusLabel")
 
         form = QFormLayout()
-        form.addRow("FlashDriver", self.flash_driver_edit)
-        form.addRow("App", self.app_edit)
+        form.addRow("FlashDriver", _path_row(self.flash_driver_edit, self.flash_driver_browse_button))
+        form.addRow("App", _path_row(self.app_edit, self.app_browse_button))
         layout.addLayout(form)
         layout.addWidget(self.use_fixture_button)
         layout.addWidget(self.flash_start_button)
+        layout.addWidget(self.flash_status_label)
         layout.addWidget(self.flash_progress)
         self.flash_stage_log = QPlainTextEdit()
         self.flash_stage_log.setReadOnly(True)
+        self.flash_stage_log.setFont(QFont("Cascadia Mono", 10))
         layout.addWidget(self.flash_stage_log, 1)
         return tab
 
@@ -199,8 +223,60 @@ class MainWindow(QMainWindow):
         layout.addLayout(button_row)
         self.trace_log = QPlainTextEdit()
         self.trace_log.setReadOnly(True)
+        self.trace_log.setFont(QFont("Cascadia Mono", 10))
         layout.addWidget(self.trace_log)
         return panel
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QMainWindow {
+                background: #F6F8FB;
+            }
+            QLineEdit, QComboBox, QTreeWidget, QPlainTextEdit {
+                border: 1px solid #D7DDE6;
+                border-radius: 4px;
+                background: #FFFFFF;
+                selection-background-color: #2F80ED;
+            }
+            QPushButton {
+                min-height: 24px;
+                border: 1px solid #CBD5E1;
+                border-radius: 4px;
+                background: #FFFFFF;
+                padding: 3px 10px;
+            }
+            QPushButton:hover {
+                background: #F1F5F9;
+            }
+            QPushButton:disabled {
+                color: #94A3B8;
+                background: #F8FAFC;
+            }
+            QTabWidget::pane {
+                border: 1px solid #E2E8F0;
+                background: #FFFFFF;
+            }
+            QProgressBar {
+                height: 16px;
+                border: 1px solid #CBD5E1;
+                border-radius: 4px;
+                background: #EEF2F7;
+                text-align: center;
+                font-weight: 600;
+            }
+            QProgressBar::chunk {
+                border-radius: 3px;
+                background-color: #2F80ED;
+            }
+            QLabel#flashStatusLabel {
+                min-height: 26px;
+                color: #0F172A;
+                font-weight: 600;
+                padding: 2px 0;
+            }
+            """
+        )
 
     def _start_worker(self, worker: QObject) -> None:
         self._set_operation_controls_enabled(False)
@@ -356,10 +432,26 @@ class MainWindow(QMainWindow):
         self.flash_driver_edit.setText("tests/fixtures/flash_driver_18b.bin")
         self.app_edit.setText("tests/fixtures/app_20b.bin")
 
+    def _on_browse_flash_driver_clicked(self) -> None:
+        self._select_firmware_file(self.flash_driver_edit, "选择 FlashDriver 镜像")
+
+    def _on_browse_app_clicked(self) -> None:
+        self._select_firmware_file(self.app_edit, "选择 App 镜像")
+
+    def _select_firmware_file(self, edit: QLineEdit, title: str) -> None:
+        current = Path(edit.text())
+        start_dir = current.parent if current.parent.exists() else Path.cwd()
+        selected, _ = QFileDialog.getOpenFileName(self, title, str(start_dir), self.firmware_file_filter)
+        if selected:
+            edit.setText(selected)
+
     def _on_flash_start_clicked(self) -> None:
         if self._session is None:
             self._show_error("请先连接通道")
             return
+        self.flash_progress.setValue(0)
+        self.flash_status_label.setText("准备刷写")
+        self.flash_stage_log.clear()
         self.flash_start_button.setEnabled(False)
         self.uds_send_button.setEnabled(False)
         worker = FlashWorker(
@@ -367,7 +459,7 @@ class MainWindow(QMainWindow):
             flash_driver_path=Path(self.flash_driver_edit.text()),
             app_path=Path(self.app_edit.text()),
             log_dir=Path("logs"),
-            dry_run=True,
+            dry_run=self._backend_name == "Fake",
         )
         worker.event.connect(self._on_worker_event)
         worker.failed.connect(self._show_error)
@@ -378,16 +470,15 @@ class MainWindow(QMainWindow):
     def _on_worker_event(self, event: WorkerEvent) -> None:
         if event.kind == "cancelled":
             self.status_label.setText("已取消")
-            self.flash_stage_log.appendPlainText(f"cancelled: {event.message}")
+            self._append_stage_event(event)
             self._append_log("CANCELLED", event.message)
             return
         if event.progress is not None:
             self.flash_progress.setValue(event.progress)
         if event.kind == "trace" and event.trace is not None:
-            data = event.trace.data.hex(" ").upper()
-            self._append_log(event.trace.direction, f"{event.trace.bus} id=0x{event.trace.frame_id:02X} {data}")
+            self._append_trace_event(event.trace)
             return
-        self.flash_stage_log.appendPlainText(f"{event.kind}: {event.message}")
+        self._append_stage_event(event)
         self._append_log(event.kind.upper(), event.message)
 
     def _set_connected(self, connected: bool) -> None:
@@ -400,7 +491,23 @@ class MainWindow(QMainWindow):
         self._append_log("ERROR", message)
 
     def _append_log(self, level: str, message: str) -> None:
-        self.trace_log.appendPlainText(f"{level}: {message}")
+        self.trace_log.appendPlainText(f"{_time_text()} {level:<8} {message}")
+
+    def _append_stage_event(self, event: WorkerEvent) -> None:
+        self.flash_status_label.setText(event.message)
+        if event.progress is None:
+            self.flash_stage_log.appendPlainText(f"{event.timestamp:%H:%M:%S}        {event.message}")
+            return
+        self.flash_stage_log.appendPlainText(f"{event.timestamp:%H:%M:%S} [{event.progress:3d}%] {event.message}")
+
+    def _append_trace_event(self, event) -> None:
+        data = event.data.hex(" ").upper()
+        note = _describe_lin_uds(event.data)
+        suffix = f"  {note}" if note else ""
+        self.trace_log.appendPlainText(
+            f"{event.timestamp:%H:%M:%S.%f}"[:12]
+            + f" {event.direction:<2}  {event.bus:<3} 0x{event.frame_id:02X}  {data:<23}{suffix}"
+        )
 
 
 def _is_thread_running(thread: QThread) -> bool:
@@ -408,3 +515,62 @@ def _is_thread_running(thread: QThread) -> bool:
         return thread.isRunning()
     except RuntimeError:
         return False
+
+
+def _default_backend_name(backends: dict[str, HostBackend]) -> str:
+    if "TSMaster" in backends:
+        return "TSMaster"
+    if "Fake" in backends:
+        return "Fake"
+    return next(iter(backends))
+
+
+def _time_text() -> str:
+    from datetime import datetime
+
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def _path_row(edit: QLineEdit, button: QPushButton) -> QHBoxLayout:
+    row = QHBoxLayout()
+    row.addWidget(edit, 1)
+    row.addWidget(button)
+    return row
+
+
+def _describe_lin_uds(data: bytes) -> str:
+    if len(data) < 3:
+        return ""
+    pci = data[1]
+    if (pci & 0xF0) == 0x00:
+        payload_len = pci & 0x0F
+        if payload_len == 0 or len(data) < 2 + payload_len:
+            return ""
+        payload = data[2 : 2 + payload_len]
+    elif (pci & 0xF0) == 0x10 and len(data) >= 4:
+        payload = data[3:8]
+    else:
+        return "UDS: ConsecutiveFrame"
+    if not payload:
+        return ""
+    sid = payload[0]
+    names = {
+        0x10: "DiagnosticSessionControl",
+        0x11: "ECUReset",
+        0x22: "ReadDataByIdentifier",
+        0x27: "SecurityAccess",
+        0x31: "RoutineControl",
+        0x34: "RequestDownload",
+        0x36: "TransferData",
+        0x37: "RequestTransferExit",
+        0x50: "Positive DiagnosticSessionControl",
+        0x51: "Positive ECUReset",
+        0x62: "Positive ReadDataByIdentifier",
+        0x67: "Positive SecurityAccess",
+        0x71: "Positive RoutineControl",
+        0x74: "Positive RequestDownload",
+        0x76: "Positive TransferData",
+        0x77: "Positive RequestTransferExit",
+        0x7F: "NegativeResponse",
+    }
+    return f"UDS: {names.get(sid, f'0x{sid:02X}')}"

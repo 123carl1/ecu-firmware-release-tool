@@ -42,6 +42,23 @@ class TsmasterVirtualTests(unittest.TestCase):
 
         self.assertEqual(responses, [bytes.fromhex("7F 31 78"), bytes.fromhex("71 01 FF 00")])
 
+    def test_e68_flash_response_plan_returns_pending_then_final_for_app_check(self):
+        flash_driver = load_bin_image(
+            Path("tests/fixtures/flash_driver_18b.bin"),
+            self.profile.memory.flash_driver_ram,
+            self.profile.memory.flash_driver_max_size,
+        )
+        app = load_bin_image(
+            Path("tests/fixtures/app_20b.bin"),
+            self.profile.memory.app_start,
+            self.profile.memory.app_size,
+        )
+        plan = E68FlashResponsePlan(self.profile, flash_driver_data=flash_driver.data, app_data=app.data)
+
+        responses = plan.responses_for(bytes.fromhex("31 01 FF 01"))
+
+        self.assertEqual(responses, [bytes.fromhex("7F 31 78"), bytes.fromhex("71 01 FF 01 00")])
+
     def test_e68_flash_response_plan_validates_transfer_crc(self):
         flash_driver = load_bin_image(
             Path("tests/fixtures/flash_driver_18b.bin"),

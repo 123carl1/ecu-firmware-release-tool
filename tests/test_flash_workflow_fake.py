@@ -32,7 +32,7 @@ class FlashWorkflowFakeTests(unittest.TestCase):
             app_data=self.app.data,
         )
         transport = LinDiagTransport(adapter, self.profile, sleep_func=lambda _: None)
-        workflow = FlashWorkflow(self.profile, transport, session)
+        workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
 
         result = workflow.run(flash_driver=self.flash_driver, app=self.app)
 
@@ -42,12 +42,13 @@ class FlashWorkflowFakeTests(unittest.TestCase):
         self.assertEqual(uds_payloads[0], bytes.fromhex("10 01"))
         self.assertIn(bytes.fromhex("31 01 02 03"), uds_payloads)
         self.assertIn(bytes.fromhex("11 01"), uds_payloads)
+        self.assertEqual(uds_payloads[-1], bytes.fromhex("22 30 00"))
 
     def test_failure_releases_diag_exclusive(self):
         session = BusSession()
         adapter = FakeLinAdapter(responses=[])
         transport = LinDiagTransport(adapter, self.profile, sleep_func=lambda _: None)
-        workflow = FlashWorkflow(self.profile, transport, session)
+        workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
 
         with self.assertRaises(Exception):
             workflow.run(flash_driver=self.flash_driver, app=self.app)
@@ -57,13 +58,69 @@ class FlashWorkflowFakeTests(unittest.TestCase):
     def test_retries_boot_programming_session_until_boot_is_ready(self):
         session = BusSession()
         transport = BootDelayedTransport()
-        workflow = FlashWorkflow(self.profile, transport, session)
+        workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
 
         result = workflow.run(flash_driver=self.flash_driver, app=self.app)
 
         self.assertTrue(result.success)
         self.assertEqual(transport.boot_session_attempts, 3)
+        self.assertTrue(transport.app_check_pending_allowed)
+        self.assertEqual(transport.app_check_timeout_ms, self.profile.uds.p2_star_ms)
         self.assertFalse(session.is_diag_exclusive)
+
+    def test_flash_workflow_emits_human_readable_progress_stages(self):
+        session = BusSession()
+        adapter = FakeLinAdapter.for_e68_flash_success(
+            self.profile,
+            flash_driver_data=self.flash_driver.data,
+            app_data=self.app.data,
+        )
+        transport = LinDiagTransport(adapter, self.profile, sleep_func=lambda _: None)
+        progress_events = []
+        workflow = FlashWorkflow(
+            self.profile,
+            transport,
+            session,
+            sleep_func=lambda _: None,
+            progress_callback=progress_events.append,
+        )
+
+        workflow.run(flash_driver=self.flash_driver, app=self.app)
+
+        messages = [event.message for event in progress_events]
+        percents = [event.percent for event in progress_events]
+        self.assertIn("进入 App 默认会话", messages)
+        self.assertIn("等待 Boot 编程会话", messages)
+        self.assertIn("擦除 App 区域", messages)
+        self.assertIn("等待 App DID 恢复通信", messages)
+        self.assertEqual(percents[0], 5)
+        self.assertEqual(percents[-1], 100)
+        self.assertTrue(all(0 <= percent <= 100 for percent in percents))
+
+    def test_app_download_progress_reports_block_position(self):
+        session = BusSession()
+        adapter = FakeLinAdapter.for_e68_flash_success(
+            self.profile,
+            flash_driver_data=self.flash_driver.data,
+            app_data=self.app.data,
+        )
+        transport = LinDiagTransport(adapter, self.profile, sleep_func=lambda _: None)
+        progress_events = []
+        workflow = FlashWorkflow(
+            self.profile,
+            transport,
+            session,
+            sleep_func=lambda _: None,
+            progress_callback=progress_events.append,
+        )
+
+        workflow.run(flash_driver=self.flash_driver, app=self.app)
+
+        app_events = [event for event in progress_events if event.stage == "下载 App" and event.total is not None]
+        self.assertTrue(app_events)
+        self.assertEqual(app_events[-1].current, app_events[-1].total)
+        self.assertIn("block", app_events[-1].message)
+        self.assertIn("bytes", app_events[-1].message)
 
 
 class BootDelayedTransport:
@@ -71,6 +128,8 @@ class BootDelayedTransport:
         self.requests: list[bytes] = []
         self._app_programming_session_seen = False
         self.boot_session_attempts = 0
+        self.app_check_pending_allowed = False
+        self.app_check_timeout_ms: int | None = None
 
     def request(
         self,
@@ -118,8 +177,12 @@ class BootDelayedTransport:
         if uds_payload.startswith(bytes.fromhex("31 01 FF 00")):
             return UdsResponse(payload=bytes.fromhex("71 01 FF 00"), raw_frames=())
         if uds_payload == bytes.fromhex("31 01 FF 01"):
+            self.app_check_pending_allowed = allow_response_pending
+            self.app_check_timeout_ms = timeout_ms
             return UdsResponse(payload=bytes.fromhex("71 01 FF 01 00"), raw_frames=())
         if uds_payload == bytes.fromhex("11 01"):
             return UdsResponse(payload=bytes.fromhex("51 01"), raw_frames=())
+        if uds_payload == bytes.fromhex("22 30 00"):
+            return UdsResponse(payload=bytes.fromhex("62 30 00 30 30 30"), raw_frames=())
 
         raise AssertionError(f"unexpected UDS request: {uds_payload.hex(' ')}")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from time import monotonic, sleep
 
@@ -18,11 +19,32 @@ class FlashResult:
     success: bool
 
 
+@dataclass(frozen=True)
+class FlashProgress:
+    percent: int
+    stage: str
+    message: str
+    current: int | None = None
+    total: int | None = None
+
+
+ProgressCallback = Callable[[FlashProgress], None]
+
+
 class FlashWorkflow:
-    def __init__(self, profile: ToolProfile, transport: LinDiagTransport, session: BusSession) -> None:
+    def __init__(
+        self,
+        profile: ToolProfile,
+        transport: LinDiagTransport,
+        session: BusSession,
+        sleep_func=sleep,
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
         self._profile = profile
         self._transport = transport
         self._session = session
+        self._sleep = sleep_func
+        self._progress_callback = progress_callback
 
     def run(
         self,
@@ -36,22 +58,29 @@ class FlashWorkflow:
 
         try:
             self._check_cancel(cancel_token)
+            self._emit_progress(5, "准备刷写", "开始 E68 OTA 流程")
             self._run_app_preprogramming(cancel_token)
             self._run_boot_programming(flash_driver=flash_driver, app=app, cancel_token=cancel_token)
+            self._emit_progress(100, "完成", "FLASH SUCCESS")
             return FlashResult(success=True)
         finally:
             self._session.release_diag_exclusive("flash")
 
     def _run_app_preprogramming(self, cancel_token: CancellationToken | None) -> None:
+        self._emit_progress(10, "App 会话", "进入 App 默认会话")
         self._request(bytes.fromhex("10 01"), expect_prefix=bytes.fromhex("50 01"), cancel_token=cancel_token)
+        self._emit_progress(14, "App 会话", "进入 App 扩展会话")
         self._request(bytes.fromhex("10 03"), expect_prefix=bytes.fromhex("50 03"), cancel_token=cancel_token)
+        self._emit_progress(18, "App 解锁", "App Level1 安全访问")
         self._security_access(
             seed_sub_function=0x01,
             key_sub_function=0x02,
             key_func=calc_e68_level1_key,
             cancel_token=cancel_token,
         )
+        self._emit_progress(24, "跳转 Boot", "请求 App 跳转 Bootloader")
         self._request(bytes.fromhex("31 01 02 03"), expect_prefix=bytes.fromhex("71 01 02 03 00"), cancel_token=cancel_token)
+        self._emit_progress(28, "跳转 Boot", "请求进入编程会话")
         self._request(bytes.fromhex("10 02"), expect_prefix=bytes.fromhex("50 02"), cancel_token=cancel_token)
 
     def _run_boot_programming(
@@ -62,18 +91,68 @@ class FlashWorkflow:
         cancel_token: CancellationToken | None,
     ) -> None:
         self._wait_for_boot_programming_session(cancel_token)
+        self._emit_progress(38, "Boot 解锁", "Boot FBL 安全访问")
         self._security_access(
             seed_sub_function=0x09,
             key_sub_function=0x0A,
             key_func=calc_e68_fbl_key,
             cancel_token=cancel_token,
         )
-        self._download_image(start_address=flash_driver.start_address, data=flash_driver.data, cancel_token=cancel_token)
+        self._download_image(
+            label="下载 FlashDriver",
+            progress_start=42,
+            progress_end=52,
+            start_address=flash_driver.start_address,
+            data=flash_driver.data,
+            cancel_token=cancel_token,
+        )
+        self._emit_progress(56, "运行 FlashDriver", "启动 RAM FlashDriver")
         self._request(bytes.fromhex("31 01 02 02"), expect_prefix=bytes.fromhex("71 01 02 02 00"), cancel_token=cancel_token)
         self._erase_app(app, cancel_token)
-        self._download_image(start_address=app.start_address, data=app.data, cancel_token=cancel_token)
-        self._request(bytes.fromhex("31 01 FF 01"), expect_prefix=bytes.fromhex("71 01 FF 01 00"), cancel_token=cancel_token)
+        self._download_image(
+            label="下载 App",
+            progress_start=66,
+            progress_end=90,
+            start_address=app.start_address,
+            data=app.data,
+            cancel_token=cancel_token,
+        )
+        self._emit_progress(94, "校验 App", "请求 App 完整性校验")
+        self._request(
+            bytes.fromhex("31 01 FF 01"),
+            expect_prefix=bytes.fromhex("71 01 FF 01 00"),
+            allow_response_pending=True,
+            timeout_ms=self._profile.uds.p2_star_ms,
+            cancel_token=cancel_token,
+        )
+        self._emit_progress(96, "复位", "请求 ECU Reset")
         self._request(bytes.fromhex("11 01"), expect_prefix=bytes.fromhex("51 01"), cancel_token=cancel_token)
+        self._wait_for_app_did_after_reset(cancel_token)
+
+    def _wait_for_app_did_after_reset(self, cancel_token: CancellationToken | None) -> None:
+        self._emit_progress(98, "等待 App", "等待 App DID 恢复通信")
+        deadline = monotonic() + self._profile.uds.p2_star_ms / 1000.0
+        last_error: HostToolError | None = None
+
+        while monotonic() <= deadline:
+            self._check_cancel(cancel_token)
+            try:
+                self._request(
+                    bytes.fromhex("22 30 00"),
+                    expect_prefix=bytes.fromhex("62 30 00"),
+                    timeout_ms=self._profile.uds.poll_timeout_ms,
+                    cancel_token=cancel_token,
+                )
+                return
+            except HostToolError as exc:
+                if exc.category != ErrorCategory.TRANSPORT:
+                    raise
+                last_error = exc
+                self._sleep(self._profile.uds.poll_gap_ms / 1000.0)
+
+        if last_error is not None:
+            raise HostToolError(ErrorCategory.TRANSPORT, f"App DID after reset timeout: {last_error.message}") from last_error
+        raise HostToolError(ErrorCategory.TRANSPORT, "App DID after reset timeout")
 
     def _security_access(
         self,
@@ -100,6 +179,7 @@ class FlashWorkflow:
         )
 
     def _wait_for_boot_programming_session(self, cancel_token: CancellationToken | None) -> None:
+        self._emit_progress(32, "等待 Boot", "等待 Boot 编程会话")
         deadline = monotonic() + self._profile.uds.p2_star_ms / 1000.0
         last_error: HostToolError | None = None
         while monotonic() <= deadline:
@@ -117,26 +197,51 @@ class FlashWorkflow:
                     raise
                 last_error = exc
                 self._check_cancel(cancel_token)
-                sleep(self._profile.uds.poll_gap_ms / 1000.0)
+                self._sleep(self._profile.uds.poll_gap_ms / 1000.0)
                 self._check_cancel(cancel_token)
 
         if last_error is not None:
             raise HostToolError(ErrorCategory.TRANSPORT, f"Boot programming session timeout: {last_error.message}") from last_error
         raise HostToolError(ErrorCategory.TRANSPORT, "Boot programming session timeout")
 
-    def _download_image(self, *, start_address: int, data: bytes, cancel_token: CancellationToken | None) -> None:
+    def _download_image(
+        self,
+        *,
+        label: str,
+        progress_start: int,
+        progress_end: int,
+        start_address: int,
+        data: bytes,
+        cancel_token: CancellationToken | None,
+    ) -> None:
+        self._emit_progress(progress_start, label, f"{label}: RequestDownload")
         self._request_download(start_address=start_address, size=len(data), cancel_token=cancel_token)
         crc = E68_CRC32_INIT
         block_sequence = 1
-        for chunk in split_transfer_chunks(data, self._profile.uds.max_transfer_payload):
+        chunks = list(split_transfer_chunks(data, self._profile.uds.max_transfer_payload))
+        total_blocks = len(chunks)
+        update_step = max(1, total_blocks // 200)
+        transferred = 0
+        for block_index, chunk in enumerate(chunks, start=1):
             self._request(
                 bytes([0x36, block_sequence]) + chunk,
                 expect_prefix=bytes([0x76, block_sequence]),
                 cancel_token=cancel_token,
             )
             crc = e68_crc32_update(crc, chunk)
+            transferred += len(chunk)
+            if block_index == 1 or block_index == total_blocks or block_index % update_step == 0:
+                percent = _scale_progress(progress_start, progress_end, block_index, total_blocks)
+                self._emit_progress(
+                    percent,
+                    label,
+                    f"{label}: block {block_index}/{total_blocks}, {transferred}/{len(data)} bytes",
+                    current=block_index,
+                    total=total_blocks,
+                )
             block_sequence = (block_sequence + 1) & 0xFF
 
+        self._emit_progress(progress_end, label, f"{label}: TransferExit/CRC")
         self._request(
             bytes([0x37]) + crc.to_bytes(4, "big"),
             expect_prefix=bytes([0x77]) + crc.to_bytes(4, "big"),
@@ -152,6 +257,7 @@ class FlashWorkflow:
         self._request(payload, expect_prefix=bytes.fromhex("74 20 00 06"), cancel_token=cancel_token)
 
     def _erase_app(self, app: FirmwareImage, cancel_token: CancellationToken | None) -> None:
+        self._emit_progress(62, "擦除 App", "擦除 App 区域")
         erase_length = align_up(app.size, self._profile.memory.page_size)
         payload = (
             bytes.fromhex("31 01 FF 00")
@@ -189,3 +295,30 @@ class FlashWorkflow:
     def _check_cancel(self, cancel_token: CancellationToken | None) -> None:
         if cancel_token is not None:
             cancel_token.throw_if_cancelled()
+
+    def _emit_progress(
+        self,
+        percent: int,
+        stage: str,
+        message: str,
+        *,
+        current: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        if self._progress_callback is None:
+            return
+        self._progress_callback(
+            FlashProgress(
+                percent=max(0, min(100, percent)),
+                stage=stage,
+                message=message,
+                current=current,
+                total=total,
+            )
+        )
+
+
+def _scale_progress(start: int, end: int, current: int, total: int) -> int:
+    if total <= 0:
+        return start
+    return start + int((end - start) * current / total)

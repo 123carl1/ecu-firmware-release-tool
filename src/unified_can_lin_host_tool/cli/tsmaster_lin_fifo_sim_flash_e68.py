@@ -8,7 +8,7 @@ from unified_can_lin_host_tool.adapters.tsmaster_virtual import E68FlashResponse
 from unified_can_lin_host_tool.core.errors import HostToolError
 from unified_can_lin_host_tool.core.session import BusSession
 from unified_can_lin_host_tool.e68.flash_workflow import FlashWorkflow
-from unified_can_lin_host_tool.firmware.image import load_bin_image
+from unified_can_lin_host_tool.firmware.image import load_firmware_image
 from unified_can_lin_host_tool.profile import load_profile
 from unified_can_lin_host_tool.trace import TraceLogger
 from unified_can_lin_host_tool.transport.lin_diag import LinDiagTransport
@@ -31,12 +31,12 @@ def main(argv: list[str] | None = None) -> int:
     trace_logger: TraceLogger | None = None
     try:
         profile = load_profile(args.profile)
-        flash_driver = load_bin_image(
+        flash_driver = load_firmware_image(
             args.flash_driver,
             start_address=profile.memory.flash_driver_ram,
             max_size=profile.memory.flash_driver_max_size,
         )
-        app = load_bin_image(args.app, start_address=profile.memory.app_start, max_size=profile.memory.app_size)
+        app = load_firmware_image(args.app, start_address=profile.memory.app_start, max_size=profile.memory.app_size)
         response_plan = E68FlashResponsePlan(profile, flash_driver_data=flash_driver.data, app_data=app.data)
         adapter = TsmasterLinFifoSimAdapter(
             profile,

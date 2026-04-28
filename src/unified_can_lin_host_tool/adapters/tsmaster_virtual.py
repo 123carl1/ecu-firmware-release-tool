@@ -190,7 +190,7 @@ class E68FlashResponsePlan:
         if uds_payload.startswith(bytes.fromhex("31 01 FF 00")):
             return [bytes.fromhex("7F 31 78"), bytes.fromhex("71 01 FF 00")]
         if uds_payload == bytes.fromhex("31 01 FF 01"):
-            return [bytes.fromhex("71 01 FF 01 00")]
+            return [bytes.fromhex("7F 31 78"), bytes.fromhex("71 01 FF 01 00")]
         if uds_payload == bytes.fromhex("11 01"):
             return [bytes.fromhex("51 01")]
         raise HostToolError(ErrorCategory.UDS, f"unexpected simulated E68 UDS request: {uds_payload.hex(' ')}")

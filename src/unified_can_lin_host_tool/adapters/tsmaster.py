@@ -14,6 +14,7 @@ from ctypes import (
     c_uint8,
 )
 from dataclasses import dataclass
+from pathlib import Path
 
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.transport.base import LinFrame
@@ -67,6 +68,7 @@ class TsmasterAdapter:
         *,
         dll_path: str = DEFAULT_TSMASTER_DLL,
         app_name: str = "Codex_UnifiedHostTool",
+        project_dir: str | Path | None = None,
         app_channel: int = 0,
         hw_name: str = "TC1016",
         hw_subtype: int = 11,
@@ -76,6 +78,7 @@ class TsmasterAdapter:
     ) -> None:
         self.dll_path = dll_path
         self.app_name = app_name
+        self.project_dir = Path(project_dir) if project_dir is not None else None
         self.app_channel = app_channel
         self.hw_name = hw_name
         self.hw_subtype = hw_subtype
@@ -207,6 +210,10 @@ class TsmasterAdapter:
         self._initialize_lib_tsmaster.restype = c_int32
         self._initialize_lib_tsmaster.argtypes = [c_char_p]
 
+        self._initialize_lib_tsmaster_with_project = self._dll.initialize_lib_tsmaster_with_project
+        self._initialize_lib_tsmaster_with_project.restype = c_int32
+        self._initialize_lib_tsmaster_with_project.argtypes = [c_char_p, c_char_p]
+
         self._finalize_lib_tsmaster = self._dll.finalize_lib_tsmaster
         self._finalize_lib_tsmaster.restype = None
         self._finalize_lib_tsmaster.argtypes = []
@@ -297,7 +304,13 @@ class TsmasterAdapter:
 
     def _initialize(self) -> None:
         app_name = self.app_name.encode("utf-8")
-        self._must("initialize_lib_tsmaster", self._initialize_lib_tsmaster(app_name))
+        if self.project_dir is None:
+            self._must("initialize_lib_tsmaster", self._initialize_lib_tsmaster(app_name))
+        else:
+            self._must(
+                "initialize_lib_tsmaster_with_project",
+                self._initialize_lib_tsmaster_with_project(app_name, str(self.project_dir).encode("utf-8")),
+            )
         self._must("tsapp_set_current_application", self._tsapp_set_current_application(app_name))
 
     def _finalize(self) -> None:
