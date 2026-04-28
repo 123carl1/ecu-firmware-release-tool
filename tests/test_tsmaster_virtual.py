@@ -17,10 +17,10 @@ class TsmasterVirtualTests(unittest.TestCase):
         self.profile = load_profile("profiles/e68_lin_bootloader.yaml")
 
     def test_lin_uds_request_assembler_rebuilds_multi_frame_payload(self):
-        assembler = LinUdsRequestAssembler(request_id=0x3C, nad=0x02)
+        assembler = LinUdsRequestAssembler(request_id=0x3C, nad=0x11)
 
-        first = assembler.feed_frame(0x3C, bytes.fromhex("02 10 08 36 01 01 02 03"))
-        second = assembler.feed_frame(0x3C, bytes.fromhex("02 21 04 05 06 FF FF FF"))
+        first = assembler.feed_frame(0x3C, bytes.fromhex("11 10 08 36 01 01 02 03"))
+        second = assembler.feed_frame(0x3C, bytes.fromhex("11 21 04 05 06 FF FF FF"))
 
         self.assertIsNone(first)
         self.assertEqual(second, bytes.fromhex("36 01 01 02 03 04 05 06"))

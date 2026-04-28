@@ -183,7 +183,7 @@ host_tool/
 `LinDiagTransport` 的职责：
 
 1. 根据 Profile 读取 LIN 诊断参数：
-   - NAD：从 Profile 读取，E68 默认值为 `0x02`
+   - NAD：从 Profile 读取，E68 默认值为 `0x11`
    - 请求 ID：从 Profile 读取，E68 默认值为 `0x3C`
    - 响应 ID：从 Profile 读取，E68 默认值为 `0x3D`
    - 校验和：诊断帧使用 Classic checksum
@@ -262,7 +262,7 @@ bus:
   baudrate: 19200
   request_id: 0x3C
   response_id: 0x3D
-  nad: 0x02
+  nad: 0x11
 
 memory:
   app_start: 0x00007000
@@ -448,7 +448,7 @@ logs/2026-04-26/195000_e68_lin_bootloader_usb2xxx_lin1.log
 关键协议规则：
 
 1. LIN 诊断帧使用 `0x3C` 请求、`0x3D` 响应。
-2. NAD 固定为 `0x02`。
+2. NAD 固定为 `0x11`。
 3. Boot 侧 LIN 诊断支持单帧和请求多帧；响应当前为单帧，最大 UDS 响应载荷 6 字节。
 4. `$34` 格式固定为 `34 00 44 + addr32 + size32`。
 5. `$36` 每块请求 UDS 负载长度最大为 `0x0402`，其中 2 字节为 SID 和块序号，数据区最多 1024 字节。

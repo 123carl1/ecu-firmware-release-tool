@@ -130,7 +130,7 @@ class MainWindowBackendRegistryTest(unittest.TestCase):
                 trace=TraceEvent(
                     direction="TX",
                     frame_id=0x3C,
-                    data=bytes.fromhex("02 02 10 03 FF FF FF FF"),
+                    data=bytes.fromhex("11 02 10 03 FF FF FF FF"),
                 ),
             )
 

@@ -16,7 +16,7 @@ class RecordingAdapter:
         self.closed = False
         self.sent = []
         self.responses = [
-            (0x3D, bytes.fromhex("02 02 50 01 FF FF FF FF")),
+            (0x3D, bytes.fromhex("11 02 50 01 FF FF FF FF")),
         ]
 
     @classmethod

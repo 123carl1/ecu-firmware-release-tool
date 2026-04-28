@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QFormLayout(tab)
         self.lin_id_edit = QLineEdit("0x3C")
-        self.lin_data_edit = QLineEdit("02 02 10 01 FF FF FF FF")
+        self.lin_data_edit = QLineEdit("11 02 10 01 FF FF FF FF")
         self.bus_send_button = QPushButton("发送")
         self.bus_send_button.setEnabled(False)
         layout.addRow("总线", QLabel("LIN"))

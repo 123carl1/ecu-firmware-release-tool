@@ -8,7 +8,7 @@ class ProfileTests(unittest.TestCase):
     def test_load_e68_profile(self):
         profile = load_profile(Path("profiles/e68_lin_bootloader.yaml"))
 
-        self.assertEqual(profile.bus.nad, 0x02)
+        self.assertEqual(profile.bus.nad, 0x11)
         self.assertEqual(profile.bus.request_id, 0x3C)
         self.assertEqual(profile.bus.response_id, 0x3D)
         self.assertEqual(profile.uds.frame_gap_ms, 12)
@@ -22,7 +22,7 @@ class ProfileTests(unittest.TestCase):
                 "baudrate": 19200,
                 "request_id": 0x3C,
                 "response_id": 0x3D,
-                "nad": 0x02,
+                "nad": 0x11,
             },
             "memory": {
                 "app_start": 0x7000,

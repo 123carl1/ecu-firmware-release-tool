@@ -89,8 +89,8 @@ class FlashCliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("start_in_bootloader=True", output.getvalue())
             log_text = next(Path(tmp).glob("trace_*.log")).read_text(encoding="utf-8")
-            self.assertIn("data=02 02 10 02", log_text)
-            self.assertNotIn("data=02 02 27 01", log_text)
+            self.assertIn("data=11 02 10 02", log_text)
+            self.assertNotIn("data=11 02 27 01", log_text)
 
     def test_tsmaster_dry_run_accepts_mapping_arguments(self):
         output = StringIO()

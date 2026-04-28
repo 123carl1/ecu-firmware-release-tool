@@ -4,7 +4,7 @@ bus:
   baudrate: 19200
   request_id: 0x3C
   response_id: 0x3D
-  nad: 0x02
+  nad: 0x11
 memory:
   app_start: 0x00007000
   app_size: 0x00019000

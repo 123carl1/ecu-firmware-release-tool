@@ -9,44 +9,44 @@ from unified_can_lin_host_tool.transport.lin_diag import LinDiagTransport
 class LinDiagTransportTests(unittest.TestCase):
     def test_single_frame_request_uses_profile_nad_and_ids(self):
         profile = load_profile("profiles/e68_lin_bootloader.yaml")
-        adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("02 02 50 01 FF FF FF FF"))])
+        adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("11 02 50 01 FF FF FF FF"))])
         transport = LinDiagTransport(adapter, profile, sleep_func=lambda _: None)
 
         response = transport.request(bytes.fromhex("10 01"), expect_prefix=bytes.fromhex("50 01"))
 
         self.assertEqual(response.payload, bytes.fromhex("50 01"))
-        self.assertEqual(adapter.sent_frames[0], (0x3C, bytes.fromhex("02 02 10 01 FF FF FF FF")))
+        self.assertEqual(adapter.sent_frames[0], (0x3C, bytes.fromhex("11 02 10 01 FF FF FF FF")))
 
     def test_multi_frame_request_splits_to_first_and_consecutive_frames(self):
         profile = load_profile("profiles/e68_lin_bootloader.yaml")
-        adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("02 02 76 01 FF FF FF FF"))])
+        adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("11 02 76 01 FF FF FF FF"))])
         transport = LinDiagTransport(adapter, profile, sleep_func=lambda _: None)
 
         transport.request(bytes.fromhex("36 01 01 02 03 04 05 06"), expect_prefix=bytes.fromhex("76 01"))
 
-        self.assertEqual(adapter.sent_frames[0], (0x3C, bytes.fromhex("02 10 08 36 01 01 02 03")))
-        self.assertEqual(adapter.sent_frames[1], (0x3C, bytes.fromhex("02 21 04 05 06 FF FF FF")))
+        self.assertEqual(adapter.sent_frames[0], (0x3C, bytes.fromhex("11 10 08 36 01 01 02 03")))
+        self.assertEqual(adapter.sent_frames[1], (0x3C, bytes.fromhex("11 21 04 05 06 FF FF FF")))
 
     def test_transfer_data_request_1026_bytes_splits_to_172_lin_frames(self):
         profile = load_profile("profiles/e68_lin_bootloader.yaml")
-        adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("02 02 76 01 FF FF FF FF"))])
+        adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("11 02 76 01 FF FF FF FF"))])
         transport = LinDiagTransport(adapter, profile, sleep_func=lambda _: None)
         uds_payload = bytes([0x36, 0x01]) + bytes([0xA5]) * 1024
 
         transport.request(uds_payload, expect_prefix=bytes.fromhex("76 01"))
 
         self.assertEqual(len(adapter.sent_frames), 172)
-        self.assertEqual(adapter.sent_frames[0], (0x3C, bytes.fromhex("02 14 02 36 01 A5 A5 A5")))
+        self.assertEqual(adapter.sent_frames[0], (0x3C, bytes.fromhex("11 14 02 36 01 A5 A5 A5")))
         self.assertEqual(adapter.sent_frames[-1][0], 0x3C)
-        self.assertEqual(adapter.sent_frames[-1][1][0], 0x02)
+        self.assertEqual(adapter.sent_frames[-1][1][0], 0x11)
         self.assertEqual(adapter.sent_frames[-1][1][1], 0x2B)
 
     def test_response_pending_waits_for_final_response(self):
         profile = load_profile("profiles/e68_lin_bootloader.yaml")
         adapter = FakeLinAdapter(
             responses=[
-                (0x3D, bytes.fromhex("02 03 7F 31 78 FF FF FF")),
-                (0x3D, bytes.fromhex("02 04 71 01 FF 00 FF FF")),
+                (0x3D, bytes.fromhex("11 03 7F 31 78 FF FF FF")),
+                (0x3D, bytes.fromhex("11 04 71 01 FF 00 FF FF")),
             ]
         )
         transport = LinDiagTransport(adapter, profile, sleep_func=lambda _: None)
@@ -61,7 +61,7 @@ class LinDiagTransportTests(unittest.TestCase):
 
     def test_empty_single_frame_response_is_classified_error(self):
         profile = load_profile("profiles/e68_lin_bootloader.yaml")
-        adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("02 00 FF FF FF FF FF FF"))])
+        adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("11 00 FF FF FF FF FF FF"))])
         transport = LinDiagTransport(adapter, profile, sleep_func=lambda _: None)
 
         with self.assertRaises(HostToolError) as caught:
