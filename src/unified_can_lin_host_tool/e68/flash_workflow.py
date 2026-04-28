@@ -254,7 +254,25 @@ class FlashWorkflow:
             + start_address.to_bytes(4, "big")
             + size.to_bytes(4, "big")
         )
-        self._request(payload, expect_prefix=bytes.fromhex("74 20 00 06"), cancel_token=cancel_token)
+        response = self._request(payload, expect_prefix=bytes.fromhex("74 20"), cancel_token=cancel_token)
+        self._validate_request_download_response(response.payload)
+
+    def _validate_request_download_response(self, payload: bytes) -> None:
+        if len(payload) < 4:
+            raise HostToolError(ErrorCategory.UDS, "RequestDownload response is too short")
+        if payload[0] != 0x74 or payload[1] != 0x20:
+            raise HostToolError(ErrorCategory.UDS, "RequestDownload response has invalid header")
+
+        max_number_of_block_length = int.from_bytes(payload[2:4], "big")
+        required = self._profile.uds.max_transfer_payload + 2
+        if max_number_of_block_length < required:
+            raise HostToolError(
+                ErrorCategory.UDS,
+                (
+                    "RequestDownload maxNumberOfBlockLength "
+                    f"0x{max_number_of_block_length:04X} is smaller than required 0x{required:04X}"
+                ),
+            )
 
     def _erase_app(self, app: FirmwareImage, cancel_token: CancellationToken | None) -> None:
         self._emit_progress(62, "擦除 App", "擦除 App 区域")

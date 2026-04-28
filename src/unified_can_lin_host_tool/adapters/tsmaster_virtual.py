@@ -179,7 +179,8 @@ class E68FlashResponsePlan:
             return [bytes.fromhex("67 0A")]
         if uds_payload.startswith(bytes.fromhex("34")):
             self._active_download.clear()
-            return [bytes.fromhex("74 20 00 06")]
+            max_number = self._profile.uds.max_transfer_payload + 2
+            return [bytes([0x74, 0x20]) + max_number.to_bytes(2, "big")]
         if uds_payload.startswith(bytes.fromhex("36")):
             self._active_download.extend(uds_payload[2:])
             return [bytes([0x76, uds_payload[1]])]

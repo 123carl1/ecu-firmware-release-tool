@@ -5,7 +5,7 @@ from unified_can_lin_host_tool.adapters.fake import FakeLinAdapter
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.core.session import BusSession
 from unified_can_lin_host_tool.e68.flash_workflow import FlashWorkflow
-from unified_can_lin_host_tool.firmware.image import load_bin_image
+from unified_can_lin_host_tool.firmware.image import FirmwareImage, load_bin_image
 from unified_can_lin_host_tool.profile import load_profile
 from unified_can_lin_host_tool.transport.lin_diag import LinDiagTransport, UdsResponse
 
@@ -57,7 +57,7 @@ class FlashWorkflowFakeTests(unittest.TestCase):
 
     def test_retries_boot_programming_session_until_boot_is_ready(self):
         session = BusSession()
-        transport = BootDelayedTransport()
+        transport = BootDelayedTransport(self.profile)
         workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
 
         result = workflow.run(flash_driver=self.flash_driver, app=self.app)
@@ -122,9 +122,56 @@ class FlashWorkflowFakeTests(unittest.TestCase):
         self.assertIn("block", app_events[-1].message)
         self.assertIn("bytes", app_events[-1].message)
 
+    def test_request_download_rejects_too_small_ecu_block_length(self):
+        class TooSmallBlockTransport(BootDelayedTransport):
+            def request(
+                self,
+                uds_payload: bytes,
+                *,
+                expect_sid=None,
+                expect_prefix=None,
+                timeout_ms=None,
+                allow_response_pending=False,
+                cancel_token=None,
+            ):
+                if uds_payload.startswith(bytes.fromhex("34")):
+                    return UdsResponse(payload=bytes.fromhex("74 20 00 06"), raw_frames=())
+                return super().request(
+                    uds_payload,
+                    expect_sid=expect_sid,
+                    expect_prefix=expect_prefix,
+                    timeout_ms=timeout_ms,
+                    allow_response_pending=allow_response_pending,
+                    cancel_token=cancel_token,
+                )
+
+        session = BusSession()
+        transport = TooSmallBlockTransport(self.profile)
+        workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
+
+        with self.assertRaisesRegex(HostToolError, "maxNumberOfBlockLength"):
+            workflow.run(flash_driver=self.flash_driver, app=self.app)
+
+    def test_app_image_is_split_into_1024_byte_transfer_data_chunks(self):
+        session = BusSession()
+        transport = BootDelayedTransport(self.profile)
+        workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
+        app = FirmwareImage(
+            path=Path("app_2050.bin"),
+            start_address=self.profile.memory.app_start,
+            data=bytes([0x5A]) * 2050,
+        )
+
+        result = workflow.run(flash_driver=self.flash_driver, app=app)
+
+        self.assertTrue(result.success)
+        transfer_lengths = [len(req) for req in transport.requests if req.startswith(bytes([0x36]))]
+        self.assertEqual(transfer_lengths[-3:], [1026, 1026, 4])
+
 
 class BootDelayedTransport:
-    def __init__(self):
+    def __init__(self, profile):
+        self.profile = profile
         self.requests: list[bytes] = []
         self._app_programming_session_seen = False
         self.boot_session_attempts = 0
@@ -167,7 +214,8 @@ class BootDelayedTransport:
         if uds_payload.startswith(bytes.fromhex("27 0A")):
             return UdsResponse(payload=bytes.fromhex("67 0A"), raw_frames=())
         if uds_payload.startswith(bytes.fromhex("34")):
-            return UdsResponse(payload=bytes.fromhex("74 20 00 06"), raw_frames=())
+            max_number = self.profile.uds.max_transfer_payload + 2
+            return UdsResponse(payload=bytes([0x74, 0x20]) + max_number.to_bytes(2, "big"), raw_frames=())
         if uds_payload.startswith(bytes.fromhex("36")):
             return UdsResponse(payload=bytes([0x76, uds_payload[1]]), raw_frames=())
         if uds_payload.startswith(bytes.fromhex("37")):

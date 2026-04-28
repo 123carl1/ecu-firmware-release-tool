@@ -5,6 +5,11 @@ from unified_can_lin_host_tool.profile import ToolProfile
 from unified_can_lin_host_tool.transport.base import LinFrame
 
 
+def _request_download_response(profile: ToolProfile) -> bytes:
+    max_number = profile.uds.max_transfer_payload + 2
+    return bytes([0x74, 0x20]) + max_number.to_bytes(2, "big")
+
+
 class FakeLinAdapter:
     def __init__(self, responses: list[tuple[int, bytes]] | None = None) -> None:
         self.sent_frames: list[tuple[int, bytes]] = []
@@ -46,7 +51,7 @@ class FakeLinAdapter:
         add(bytes.fromhex("67 09") + boot_seed)
         add(bytes.fromhex("67 0A"))
 
-        add(bytes.fromhex("74 20 00 06"))
+        add(_request_download_response(profile))
         for block_sequence in _block_sequences(flash_driver_data, profile.uds.max_transfer_payload):
             add(bytes([0x76, block_sequence]))
         add(bytes([0x77]) + e68_crc32(flash_driver_data).to_bytes(4, "big"))
@@ -55,7 +60,7 @@ class FakeLinAdapter:
         add(bytes.fromhex("7F 31 78"))
         add(bytes.fromhex("71 01 FF 00"))
 
-        add(bytes.fromhex("74 20 00 06"))
+        add(_request_download_response(profile))
         for block_sequence in _block_sequences(app_data, profile.uds.max_transfer_payload):
             add(bytes([0x76, block_sequence]))
         add(bytes([0x77]) + e68_crc32(app_data).to_bytes(4, "big"))
