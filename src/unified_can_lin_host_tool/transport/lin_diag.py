@@ -102,6 +102,7 @@ class LinDiagTransport:
     ) -> UdsResponse:
         raw_frames: list[LinFrame] = []
         deadline = monotonic() + timeout_ms / 1000.0
+        last_unexpected_response: HostToolError | None = None
 
         while monotonic() <= deadline:
             _throw_if_cancelled(cancel_token)
@@ -125,11 +126,15 @@ class LinDiagTransport:
             if payload.startswith(b"\x7F"):
                 raise HostToolError(ErrorCategory.UDS, f"received NRC 0x{payload[-1]:02X}")
             if expect_sid is not None and payload[0] != expect_sid:
-                raise HostToolError(ErrorCategory.UDS, "positive response SID mismatch")
+                last_unexpected_response = HostToolError(ErrorCategory.UDS, "positive response SID mismatch")
+                continue
             if expect_prefix is not None and not payload.startswith(expect_prefix):
-                raise HostToolError(ErrorCategory.UDS, "positive response prefix mismatch")
+                last_unexpected_response = HostToolError(ErrorCategory.UDS, "positive response prefix mismatch")
+                continue
             return UdsResponse(payload=payload, raw_frames=tuple(raw_frames))
 
+        if last_unexpected_response is not None:
+            raise last_unexpected_response
         raise HostToolError(ErrorCategory.TRANSPORT, "LIN UDS response timeout")
 
     def _parse_single_frame_response(self, frame: LinFrame) -> bytes:

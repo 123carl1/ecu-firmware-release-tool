@@ -59,6 +59,21 @@ class LinDiagTransportTests(unittest.TestCase):
 
         self.assertEqual(response.payload[:4], bytes.fromhex("71 01 FF 00"))
 
+    def test_stale_positive_response_is_skipped_until_expected_response(self):
+        profile = load_profile("profiles/e68_lin_bootloader.yaml")
+        adapter = FakeLinAdapter(
+            responses=[
+                (0x3D, bytes.fromhex("11 06 50 02 00 32 13 88")),
+                (0x3D, bytes.fromhex("11 06 67 09 24 68 35 79")),
+            ]
+        )
+        transport = LinDiagTransport(adapter, profile, sleep_func=lambda _: None)
+
+        response = transport.request(bytes.fromhex("27 09"), expect_prefix=bytes.fromhex("67 09"))
+
+        self.assertEqual(response.payload, bytes.fromhex("67 09 24 68 35 79"))
+        self.assertEqual(len(response.raw_frames), 2)
+
     def test_empty_single_frame_response_is_classified_error(self):
         profile = load_profile("profiles/e68_lin_bootloader.yaml")
         adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("11 00 FF FF FF FF FF FF"))])
