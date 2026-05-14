@@ -175,7 +175,7 @@ class MainWindow(QMainWindow):
         self.use_fixture_button = QPushButton("使用测试 fixture")
         self.use_fixture_button.clicked.connect(self._on_use_fixture_clicked)
         self.start_in_bootloader_check = QCheckBox("目标已在 Bootloader")
-        self.start_in_bootloader_check.setToolTip("App 已擦除或目标已停在 Bootloader 时启用，跳过 App 解锁和 App 跳转步骤。")
+        self.start_in_bootloader_check.setToolTip("App 已擦除或目标已停在 Bootloader 时启用；仍按协议执行完整预编程流程。")
         self.flash_start_button = QPushButton("开始刷写")
         self.flash_start_button.clicked.connect(self._on_flash_start_clicked)
         self.flash_progress = QProgressBar()

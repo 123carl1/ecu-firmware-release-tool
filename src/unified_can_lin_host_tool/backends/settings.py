@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class TsmasterSettings:
     dll_path: str = "D:/software/TSMaster/bin64/TSMaster.dll"
-    app_name: str = "Codex_UnifiedHostTool"
+    app_name: str = "TSMaster"
     project_dir: str | None = "D:/01_WorkProgram/Company_Program/10_AI_Adapted_Seat/DAU_FM33_HT/上位机"
     app_channel: int = 0
     hw_name: str = "TC1016"

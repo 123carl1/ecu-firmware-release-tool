@@ -64,7 +64,7 @@ class FlashCliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("FLASH SUCCESS", output.getvalue())
 
-    def test_fake_dry_run_start_in_bootloader_skips_app_preprogramming(self):
+    def test_fake_dry_run_start_in_bootloader_runs_full_protocol_preflow(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = StringIO()
 
@@ -89,8 +89,13 @@ class FlashCliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("start_in_bootloader=True", output.getvalue())
             log_text = next(Path(tmp).glob("trace_*.log")).read_text(encoding="utf-8")
+            self.assertIn("data=11 02 10 01", log_text)
+            self.assertIn("data=11 02 10 03", log_text)
+            self.assertIn("data=11 02 27 01", log_text)
+            self.assertIn("data=11 04 31 01 02 03", log_text)
             self.assertIn("data=11 02 10 02", log_text)
-            self.assertNotIn("data=11 02 27 01", log_text)
+            self.assertIn("data=11 02 27 09", log_text)
+            self.assertIn("data=11 06 27 0A", log_text)
 
     def test_tsmaster_dry_run_accepts_mapping_arguments(self):
         output = StringIO()

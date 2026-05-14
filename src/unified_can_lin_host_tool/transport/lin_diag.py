@@ -43,6 +43,7 @@ class LinDiagTransport:
         expect_prefix: bytes | None = None,
         timeout_ms: int | None = None,
         allow_response_pending: bool = False,
+        ignore_invalid_responses: bool = False,
         cancel_token: CancellationToken | None = None,
     ) -> UdsResponse:
         if not uds_payload:
@@ -60,6 +61,7 @@ class LinDiagTransport:
             expect_prefix=expect_prefix,
             timeout_ms=timeout_ms or self._profile.uds.poll_timeout_ms,
             allow_response_pending=allow_response_pending,
+            ignore_invalid_responses=ignore_invalid_responses,
             cancel_token=cancel_token,
         )
 
@@ -98,6 +100,7 @@ class LinDiagTransport:
         expect_prefix: bytes | None,
         timeout_ms: int,
         allow_response_pending: bool,
+        ignore_invalid_responses: bool,
         cancel_token: CancellationToken | None,
     ) -> UdsResponse:
         raw_frames: list[LinFrame] = []
@@ -117,7 +120,13 @@ class LinDiagTransport:
 
             raw_frames.append(frame)
             self._write_trace("RX", frame.frame_id, frame.data)
-            payload = self._parse_single_frame_response(frame)
+            try:
+                payload = self._parse_single_frame_response(frame)
+            except HostToolError as exc:
+                if ignore_invalid_responses and exc.category == ErrorCategory.TRANSPORT:
+                    last_unexpected_response = exc
+                    continue
+                raise
             if _is_response_pending(payload):
                 if allow_response_pending:
                     continue

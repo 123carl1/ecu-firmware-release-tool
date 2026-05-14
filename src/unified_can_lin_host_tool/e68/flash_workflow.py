@@ -61,31 +61,57 @@ class FlashWorkflow:
             self._check_cancel(cancel_token)
             self._emit_progress(5, "准备刷写", "开始 E68 OTA 流程")
             if start_in_bootloader:
-                self._emit_progress(30, "等待 Boot", "从 Bootloader 开始，跳过 App 预编程")
-            else:
-                self._run_app_preprogramming(cancel_token)
-            self._run_boot_programming(flash_driver=flash_driver, app=app, cancel_token=cancel_token)
+                self._emit_progress(8, "Boot 起步", "从 Bootloader 开始，执行完整预编程流程")
+            self._run_preprogramming(cancel_token)
+            self._run_boot_programming(
+                flash_driver=flash_driver,
+                app=app,
+                cancel_token=cancel_token,
+            )
             self._emit_progress(100, "完成", "FLASH SUCCESS")
             return FlashResult(success=True)
         finally:
             self._session.release_diag_exclusive("flash")
 
-    def _run_app_preprogramming(self, cancel_token: CancellationToken | None) -> None:
-        self._emit_progress(10, "App 会话", "进入 App 默认会话")
-        self._request(bytes.fromhex("10 01"), expect_prefix=bytes.fromhex("50 01"), cancel_token=cancel_token)
-        self._emit_progress(14, "App 会话", "进入 App 扩展会话")
-        self._request(bytes.fromhex("10 03"), expect_prefix=bytes.fromhex("50 03"), cancel_token=cancel_token)
-        self._emit_progress(18, "App 解锁", "App Level1 安全访问")
+    def _run_preprogramming(self, cancel_token: CancellationToken | None) -> None:
+        preprogramming_timeout_ms = self._p2_star_transport_timeout_ms()
+
+        self._emit_progress(10, "预编程", "进入默认会话")
+        self._request(
+            bytes.fromhex("10 01"),
+            expect_prefix=bytes.fromhex("50 01"),
+            timeout_ms=preprogramming_timeout_ms,
+            cancel_token=cancel_token,
+        )
+        self._emit_progress(14, "预编程", "进入扩展会话")
+        self._request(
+            bytes.fromhex("10 03"),
+            expect_prefix=bytes.fromhex("50 03"),
+            timeout_ms=preprogramming_timeout_ms,
+            cancel_token=cancel_token,
+        )
+        self._emit_progress(18, "预编程", "Level1 安全访问")
         self._security_access(
             seed_sub_function=0x01,
             key_sub_function=0x02,
             key_func=calc_e68_level1_key,
+            timeout_ms=preprogramming_timeout_ms,
             cancel_token=cancel_token,
         )
-        self._emit_progress(24, "跳转 Boot", "请求 App 跳转 Bootloader")
-        self._request(bytes.fromhex("31 01 02 03"), expect_prefix=bytes.fromhex("71 01 02 03 00"), cancel_token=cancel_token)
-        self._emit_progress(28, "跳转 Boot", "请求进入编程会话")
-        self._request(bytes.fromhex("10 02"), expect_prefix=bytes.fromhex("50 02"), cancel_token=cancel_token)
+        self._emit_progress(24, "预编程", "执行刷写条件检查")
+        self._request(
+            bytes.fromhex("31 01 02 03"),
+            expect_prefix=bytes.fromhex("71 01 02 03 00"),
+            timeout_ms=preprogramming_timeout_ms,
+            cancel_token=cancel_token,
+        )
+        self._emit_progress(28, "编程会话", "进入编程会话")
+        self._request(
+            bytes.fromhex("10 02"),
+            expect_prefix=bytes.fromhex("50 02"),
+            timeout_ms=preprogramming_timeout_ms,
+            cancel_token=cancel_token,
+        )
 
     def _run_boot_programming(
         self,
@@ -94,12 +120,12 @@ class FlashWorkflow:
         app: FirmwareImage,
         cancel_token: CancellationToken | None,
     ) -> None:
-        self._wait_for_boot_programming_session(cancel_token)
         self._emit_progress(38, "Boot 解锁", "Boot FBL 安全访问")
         self._security_access(
             seed_sub_function=0x09,
             key_sub_function=0x0A,
             key_func=calc_e68_fbl_key,
+            timeout_ms=self._p2_star_transport_timeout_ms(),
             cancel_token=cancel_token,
         )
         self._download_image(
@@ -164,11 +190,13 @@ class FlashWorkflow:
         seed_sub_function: int,
         key_sub_function: int,
         key_func,
+        timeout_ms: int | None = None,
         cancel_token: CancellationToken | None,
     ) -> None:
         seed_response = self._request(
             bytes([0x27, seed_sub_function]),
             expect_prefix=bytes([0x67, seed_sub_function]),
+            timeout_ms=timeout_ms,
             cancel_token=cancel_token,
         ).payload
         seed = seed_response[2:6]
@@ -179,34 +207,9 @@ class FlashWorkflow:
         self._request(
             bytes([0x27, key_sub_function]) + key,
             expect_prefix=bytes([0x67, key_sub_function]),
+            timeout_ms=timeout_ms,
             cancel_token=cancel_token,
         )
-
-    def _wait_for_boot_programming_session(self, cancel_token: CancellationToken | None) -> None:
-        self._emit_progress(32, "等待 Boot", "等待 Boot 编程会话")
-        deadline = monotonic() + self._profile.uds.p2_star_ms / 1000.0
-        last_error: HostToolError | None = None
-        while monotonic() <= deadline:
-            self._check_cancel(cancel_token)
-            try:
-                self._request(
-                    bytes.fromhex("10 02"),
-                    expect_prefix=bytes.fromhex("50 02"),
-                    timeout_ms=self._profile.uds.poll_timeout_ms,
-                    cancel_token=cancel_token,
-                )
-                return
-            except HostToolError as exc:
-                if exc.category != ErrorCategory.TRANSPORT:
-                    raise
-                last_error = exc
-                self._check_cancel(cancel_token)
-                self._sleep(self._profile.uds.poll_gap_ms / 1000.0)
-                self._check_cancel(cancel_token)
-
-        if last_error is not None:
-            raise HostToolError(ErrorCategory.TRANSPORT, f"Boot programming session timeout: {last_error.message}") from last_error
-        raise HostToolError(ErrorCategory.TRANSPORT, "Boot programming session timeout")
 
     def _download_image(
         self,
@@ -302,6 +305,7 @@ class FlashWorkflow:
         cancel_token: CancellationToken | None,
         timeout_ms: int | None = None,
         allow_response_pending: bool = False,
+        ignore_invalid_responses: bool = True,
     ):
         self._check_cancel(cancel_token)
         response = self._transport.request(
@@ -309,6 +313,7 @@ class FlashWorkflow:
             expect_prefix=expect_prefix,
             timeout_ms=timeout_ms,
             allow_response_pending=allow_response_pending,
+            ignore_invalid_responses=ignore_invalid_responses,
             cancel_token=cancel_token,
         )
         self._check_cancel(cancel_token)
@@ -317,6 +322,9 @@ class FlashWorkflow:
     def _check_cancel(self, cancel_token: CancellationToken | None) -> None:
         if cancel_token is not None:
             cancel_token.throw_if_cancelled()
+
+    def _p2_star_transport_timeout_ms(self) -> int:
+        return self._profile.uds.p2_star_ms + max(1000, self._profile.uds.poll_timeout_ms)
 
     def _emit_progress(
         self,

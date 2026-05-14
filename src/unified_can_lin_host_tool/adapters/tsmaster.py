@@ -152,10 +152,17 @@ class TsmasterAdapter:
                 "tsapp_configure_baudrate_lin",
                 self._tsapp_configure_baudrate_lin(self.app_channel, c_float(self.baud_kbps), LIN_PROTOCOL_21),
             )
+            self._stop_lin_schedule()
             self._must("tsapp_connect", self._tsapp_connect())
+            self._stop_lin_schedule()
             self._must("tslin_set_node_functiontype", self._tslin_set_node_functiontype(self.app_channel, LIN_MASTER))
             self._must("tslin_start_lin_channel", self._tslin_start_lin_channel(self.app_channel))
+            self._stop_lin_schedule()
             self._tsfifo_enable_receive_fifo()
+            self._ignore_optional_error(
+                "tsfifo_clear_lin_receive_buffers",
+                self._tsfifo_clear_lin_receive_buffers(self.app_channel),
+            )
             self._opened = True
         except Exception:
             self.close()
@@ -276,6 +283,10 @@ class TsmasterAdapter:
         self._tsfifo_disable_receive_fifo.restype = None
         self._tsfifo_disable_receive_fifo.argtypes = []
 
+        self._tsfifo_clear_lin_receive_buffers = self._dll.tsfifo_clear_lin_receive_buffers
+        self._tsfifo_clear_lin_receive_buffers.restype = c_int32
+        self._tsfifo_clear_lin_receive_buffers.argtypes = [c_int32]
+
         self._tslin_set_node_functiontype = self._dll.tslin_set_node_functiontype
         self._tslin_set_node_functiontype.restype = c_int32
         self._tslin_set_node_functiontype.argtypes = [c_int32, c_int32]
@@ -302,6 +313,17 @@ class TsmasterAdapter:
             c_int32,
         ]
 
+        self._tslin_switch_idle_schedule_table = self._bind_optional(
+            "tslin_switch_idle_schedule_table",
+            c_int32,
+            [c_int32],
+        )
+        self._tslin_clear_schedule_tables = self._bind_optional(
+            "tslin_clear_schedule_tables",
+            c_int32,
+            [c_int32],
+        )
+
     def _initialize(self) -> None:
         app_name = self.app_name.encode("utf-8")
         if self.project_dir is None:
@@ -315,6 +337,30 @@ class TsmasterAdapter:
 
     def _finalize(self) -> None:
         self._finalize_lib_tsmaster()
+
+    def _bind_optional(self, name, restype, argtypes):
+        try:
+            func = getattr(self._dll, name)
+        except AttributeError:
+            return None
+        func.restype = restype
+        func.argtypes = argtypes
+        return func
+
+    def _stop_lin_schedule(self) -> None:
+        if self._tslin_switch_idle_schedule_table is not None:
+            self._ignore_optional_error(
+                "tslin_switch_idle_schedule_table",
+                self._tslin_switch_idle_schedule_table(self.app_channel),
+            )
+        if self._tslin_clear_schedule_tables is not None:
+            self._ignore_optional_error(
+                "tslin_clear_schedule_tables",
+                self._tslin_clear_schedule_tables(self.app_channel),
+            )
+
+    def _ignore_optional_error(self, label: str, code: int) -> None:
+        _ = (label, code)
 
     def _must(self, label: str, code: int) -> None:
         if code != 0:

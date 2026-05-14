@@ -194,6 +194,8 @@ class E68FlashResponsePlan:
             return [bytes.fromhex("7F 31 78"), bytes.fromhex("71 01 FF 01 00")]
         if uds_payload == bytes.fromhex("11 01"):
             return [bytes.fromhex("51 01")]
+        if uds_payload == bytes.fromhex("22 30 00"):
+            return [bytes.fromhex("62 30 00 30 30 30")]
         raise HostToolError(ErrorCategory.UDS, f"unexpected simulated E68 UDS request: {uds_payload.hex(' ')}")
 
     def _require_key(self, service: str, actual: bytes, expected: bytes) -> None:

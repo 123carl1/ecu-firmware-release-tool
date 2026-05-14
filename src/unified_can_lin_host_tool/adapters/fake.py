@@ -37,20 +37,18 @@ class FakeLinAdapter:
         nad = profile.bus.nad
         response_id = profile.bus.response_id
         app_seed = bytes.fromhex("35 79 24 68")
-        boot_seed = bytes.fromhex("24 68 35 79")
+        boot_fbl_seed = bytes.fromhex("24 68 35 79")
 
         def add(payload: bytes) -> None:
             responses.append((response_id, _lin_single(nad, payload)))
 
-        if not start_in_bootloader:
-            add(bytes.fromhex("50 01"))
-            add(bytes.fromhex("50 03"))
-            add(bytes.fromhex("67 01") + app_seed)
-            add(bytes.fromhex("67 02"))
-            add(bytes.fromhex("71 01 02 03 00"))
-            add(bytes.fromhex("50 02"))
+        add(bytes.fromhex("50 01"))
+        add(bytes.fromhex("50 03"))
+        add(bytes.fromhex("67 01") + app_seed)
+        add(bytes.fromhex("67 02"))
+        add(bytes.fromhex("71 01 02 03 00"))
         add(bytes.fromhex("50 02"))
-        add(bytes.fromhex("67 09") + boot_seed)
+        add(bytes.fromhex("67 09") + boot_fbl_seed)
         add(bytes.fromhex("67 0A"))
 
         add(_request_download_response(profile))

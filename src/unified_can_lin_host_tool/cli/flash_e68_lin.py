@@ -26,10 +26,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--start-in-bootloader",
         action="store_true",
-        help="目标已停在 Bootloader 时跳过 App 预编程、App 解锁和 App 跳转步骤。",
+        help="目标已停在 Bootloader 时启用；仍按协议执行完整预编程流程。",
     )
     parser.add_argument("--tsmaster-dll", "--dll", dest="tsmaster_dll", default=DEFAULT_TSMASTER_DLL)
-    parser.add_argument("--tsmaster-app", default="Codex_UnifiedHostTool")
+    parser.add_argument("--tsmaster-app", default="TSMaster")
     parser.add_argument("--tsmaster-project-dir", type=Path, default=None)
     parser.add_argument("--tsmaster-app-channel", "--tsmaster-channel", dest="tsmaster_app_channel", type=int, default=0)
     parser.add_argument("--tsmaster-hw-name", default="TC1016")

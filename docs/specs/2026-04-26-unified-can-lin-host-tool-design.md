@@ -402,7 +402,8 @@ logs/2026-04-26/195000_e68_lin_bootloader_usb2xxx_lin1.log
 
 1. 安全等级可选：
    - App Level1：`$27 01/02`
-   - Boot FBL：`$27 09/0A`
+   - Boot 兼容 Level1：`$27 01/02`，用于 no-app 场景的前置流程
+   - Boot FBL：`$27 09/0A`，用于主编程阶段
 2. 算法可选：
    - `E68 Level1`
    - `E68 FBL`
@@ -419,31 +420,31 @@ logs/2026-04-26/195000_e68_lin_bootloader_usb2xxx_lin1.log
 2. App 扩展会话：发送 `$10 03`，期望 `$50 03`。
 3. App Level1 安全访问：发送 `$27 01` 获取 4 字节 Seed，计算 Key 后发送 `$27 02 + Key`，期望 `$67 02`。
 4. App 预编程检查：发送 `$31 01 02 03`，期望 `$71 01 02 03 00`。
-5. App 进入编程会话：发送 `$10 02`，期望 `$50 02`；App 响应发出后写 Boot 请求标志并复位。
-   - 如果 App 已擦除或目标已人工停在 Bootloader，必须显式启用 `start_in_bootloader` / `--start-in-bootloader`，跳过步骤 1..5。
-6. 等待 Boot 响应。上位机应在窗口期内轮询 Boot 编程会话请求。
-7. Boot 编程会话：发送 `$10 02`，期望 `$50 02`。
-8. Boot FBL 安全访问：发送 `$27 09` 获取 Seed，计算 Key 后发送 `$27 0A + Key`，期望 `$67 0A`。
-9. FlashDriver 下载：
+5. App 进入编程会话：发送 `$10 02`，期望 `$50 02`；当前固件由 Boot 接管该肯定响应，并直接保持 Boot 编程会话。
+   - 如果 App 已擦除或目标已人工停在 Bootloader，仍需从步骤 1 开始执行完整前置流程，只是这些请求直接由 Bootloader 响应。
+6. Boot 阶段安全访问：发送 `$27 09` 获取 Seed，计算 FBL Key 后发送 `$27 0A + Key`，期望 `$67 0A`。
+   - 正常 App 跳 Boot 路径不再额外发送第二次 `$10 02`。
+   - `start_in_bootloader` 路径同样先完成步骤 1..5，再进入 `$27 09/0A`。
+7. FlashDriver 下载：
    - 发送 `$34 00 44 + flashDriverAddr32 + flashDriverSize32`。
    - 期望 `$74 20 04 02`，其中 `0x0402` 表示 `$36` UDS 请求总长最大 1026 字节。
    - 按 1024 字节以内数据区发送多次 `$36 blockSequence + data`；LIN TP 负责拆成 1 个首帧和若干连续帧。
    - 每块期望 `$76 blockSequence`。
    - 发送 `$37 + CRC32`。
    - 期望 `$77 + CRC32`。
-10. FlashDriver 检查：发送 `$31 01 02 02`，期望 `$71 01 02 02 00`。
-11. App 擦除：
+8. FlashDriver 检查：发送 `$31 01 02 02`，期望 `$71 01 02 02 00`。
+9. App 擦除：
    - 发送 `$31 01 FF 00 + appStart32 + eraseLength32`。
    - 先期望 `$7F 31 78`。
    - 持续轮询响应，直到收到 `$71 01 FF 00` 或超时。
-12. App 下载：
+10. App 下载：
    - 发送 `$34 00 44 + appStart32 + appSize32`。
    - 按 1024 字节以内数据区发送 `$36`，也就是每个完整 `$36` 请求 UDS 长度为 1026 字节。
    - 发送 `$37 + CRC32`。
    - 期望 `$77 + CRC32`。
-13. App 完整性检查：发送 `$31 01 FF 01`，期望 `$71 01 FF 01 00`。
-14. ECU 复位：发送 `$11 01`，期望 `$51 01`。
-15. 复位后可选读 App 版本或观察业务帧，确认回到 App。
+11. App 完整性检查：发送 `$31 01 FF 01`，期望 `$71 01 FF 01 00`。
+12. ECU 复位：发送 `$11 01`，期望 `$51 01`。
+13. 复位后可选读 App 版本或观察业务帧，确认回到 App。
 
 关键协议规则：
 
@@ -507,11 +508,11 @@ def e68_boot_crc32_update(current_crc: int, data: bytes) -> int:
    - 算法来自 `Application/App/Src/lin_diag_app.c`。
 
 2. `E68FblSeedKeyProvider`
-   - 对应 Boot 侧 `$27 09/0A`。
+   - 对应 Boot 侧主编程阶段 `$27 09/0A`。
    - 4 字节 Seed，4 字节 Key。
    - 算法来自 `Bootloader/App/Src/boot_security.c`。
 
-两个算法不能混用。UI 必须把安全等级和算法绑定清楚。
+同一次安全访问必须按 subFunction 选择对应算法。自动刷写流程当前使用 Level1 `$27 01/02` 完成前置流程，Boot 主编程阶段使用 FBL `$27 09/0A`。
 
 ## 错误处理
 
@@ -586,7 +587,7 @@ NRC 显示必须包含含义：
 
 2. `BOOT_NOT_ERASED`
    - 已通过 `$10 02` 进入 Boot，但尚未执行 App 擦除。
-   - 可能已完成 Boot 编程会话、FBL 解锁或 FlashDriver 下载。
+   - 可能已完成 Boot 安全解锁或 FlashDriver 下载。
    - UI 允许重新执行 Boot 阶段流程。
    - 若 FlashDriver 已校验通过，允许从 App 擦除前继续；但第一版建议为了确定性，失败后默认重新下载并校验 FlashDriver。
 
@@ -594,7 +595,7 @@ NRC 显示必须包含含义：
    - 已发送 `$31 01 FF 00`，或 App 下载已经开始。
    - Boot 会先擦除 App 有效标志；此后失败、电源中断或取消都不能假设 App 可启动。
    - UI 必须提示“ECU 可能停留在 Boot，需重新刷写完整 App”。
-   - UI 允许重新执行 Boot 编程会话、FBL 解锁、FlashDriver 下载、擦除、App 下载全流程。
+   - UI 允许重新执行 Boot 编程会话、安全解锁、FlashDriver 下载、擦除、App 下载全流程。
    - 不允许提示“进入 App”或“刷写完成”。
 
 4. `BOOT_APP_READY_RESET_PENDING`
@@ -618,7 +619,7 @@ NRC 显示必须包含含义：
 
 2. `$10 02` 后等不到 Boot
    - 提示可能仍在 App、复位中、LIN 物理层异常或 Boot 未启动。
-   - 允许重新轮询 Boot `$10 02`。
+   - 如果是 `start_in_bootloader` 场景，优先检查前置流程是否已经完整执行；正常 App 跳 Boot 场景应继续等待 Boot 接管后的 `$27 09/0A`。
    - 允许重新上电后再扫描/连接。
 
 3. FlashDriver 下载 `$37` CRC 失败
@@ -673,7 +674,7 @@ NRC 显示必须包含含义：
 4. CRC32，含分段更新。
 5. `$36` 块序号递增和回绕。
 6. App Level1 Seed/Key。
-7. Boot FBL Seed/Key。
+7. Boot Level1 兼容路径和 Boot FBL Seed/Key。
 8. NRC 解析。
 9. Profile 校验。
 10. 刷写失败恢复状态映射。

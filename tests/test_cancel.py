@@ -90,10 +90,10 @@ class FlashWorkflowCancellationTest(unittest.TestCase):
 
         self.assertFalse(session.is_diag_exclusive)
 
-    def test_flash_workflow_cancels_during_boot_session_retry(self):
+    def test_flash_workflow_cancels_during_boot_fbl_security_request(self):
         token = CancellationToken()
         session = BusSession()
-        transport = BootSessionCancellingTransport(token)
+        transport = BootFblSecurityCancellingTransport(token)
         workflow = FlashWorkflow(self.profile, transport, session)
 
         with self.assertRaises(OperationCancelled):
@@ -102,10 +102,10 @@ class FlashWorkflowCancellationTest(unittest.TestCase):
         self.assertFalse(session.is_diag_exclusive)
 
 
-class BootSessionCancellingTransport:
+class BootFblSecurityCancellingTransport:
     def __init__(self, token: CancellationToken):
         self._token = token
-        self._app_programming_session_seen = False
+        self._programming_session_seen = False
 
     def request(
         self,
@@ -115,15 +115,13 @@ class BootSessionCancellingTransport:
         expect_prefix=None,
         timeout_ms=None,
         allow_response_pending=False,
+        ignore_invalid_responses=False,
         cancel_token=None,
     ):
         self.assert_same_token(cancel_token)
         if uds_payload == bytes.fromhex("10 02"):
-            if not self._app_programming_session_seen:
-                self._app_programming_session_seen = True
-                return UdsResponse(payload=bytes.fromhex("50 02"), raw_frames=())
-            self._token.cancel()
-            raise HostToolError(ErrorCategory.TRANSPORT, "LIN UDS response timeout")
+            self._programming_session_seen = True
+            return UdsResponse(payload=bytes.fromhex("50 02"), raw_frames=())
 
         if uds_payload == bytes.fromhex("10 01"):
             return UdsResponse(payload=bytes.fromhex("50 01"), raw_frames=())
@@ -135,8 +133,13 @@ class BootSessionCancellingTransport:
             return UdsResponse(payload=bytes.fromhex("67 02"), raw_frames=())
         if uds_payload == bytes.fromhex("31 01 02 03"):
             return UdsResponse(payload=bytes.fromhex("71 01 02 03 00"), raw_frames=())
+        if uds_payload == bytes.fromhex("27 09"):
+            if self._programming_session_seen:
+                self._token.cancel()
+                self._token.throw_if_cancelled()
+            return UdsResponse(payload=bytes.fromhex("67 09 24 68 35 79"), raw_frames=())
 
-        raise AssertionError(f"unexpected UDS request before boot retry: {uds_payload.hex(' ')}")
+        raise AssertionError(f"unexpected UDS request before boot FBL security cancellation: {uds_payload.hex(' ')}")
 
     def assert_same_token(self, cancel_token):
         if cancel_token is not self._token:

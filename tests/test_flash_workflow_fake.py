@@ -41,6 +41,10 @@ class FlashWorkflowFakeTests(unittest.TestCase):
         uds_payloads = adapter.sent_uds_payloads()
         self.assertEqual(uds_payloads[0], bytes.fromhex("10 01"))
         self.assertIn(bytes.fromhex("31 01 02 03"), uds_payloads)
+        self.assertEqual(uds_payloads.count(bytes.fromhex("10 02")), 1)
+        self.assertEqual(uds_payloads.count(bytes.fromhex("27 01")), 1)
+        self.assertEqual(uds_payloads.count(bytes.fromhex("27 09")), 1)
+        self.assertTrue(any(payload.startswith(bytes.fromhex("27 0A")) for payload in uds_payloads))
         self.assertIn(bytes.fromhex("11 01"), uds_payloads)
         self.assertEqual(uds_payloads[-1], bytes.fromhex("22 30 00"))
 
@@ -55,17 +59,42 @@ class FlashWorkflowFakeTests(unittest.TestCase):
 
         self.assertFalse(session.is_diag_exclusive)
 
-    def test_retries_boot_programming_session_until_boot_is_ready(self):
+    def test_start_in_bootloader_runs_full_protocol_preflow_before_fbl(self):
         session = BusSession()
         transport = BootDelayedTransport(self.profile)
         workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
 
-        result = workflow.run(flash_driver=self.flash_driver, app=self.app)
+        result = workflow.run(flash_driver=self.flash_driver, app=self.app, start_in_bootloader=True)
 
         self.assertTrue(result.success)
-        self.assertEqual(transport.boot_session_attempts, 3)
+        self.assertEqual(transport.requests[:7], [
+            bytes.fromhex("10 01"),
+            bytes.fromhex("10 03"),
+            bytes.fromhex("27 01"),
+            bytes.fromhex("27 02 70 C7 71 B5"),
+            bytes.fromhex("31 01 02 03"),
+            bytes.fromhex("10 02"),
+            bytes.fromhex("27 09"),
+        ])
+        self.assertTrue(transport.requests[7].startswith(bytes.fromhex("27 0A")))
+        expected_timeout_ms = self.profile.uds.p2_star_ms + max(1000, self.profile.uds.poll_timeout_ms)
+        self.assertEqual(transport.timeouts[:8], [expected_timeout_ms] * 8)
+        self.assertEqual(transport.ignore_invalid_responses_by_request[bytes.fromhex("10 01")], True)
+        self.assertEqual(transport.ignore_invalid_responses_by_request[bytes.fromhex("10 02")], True)
         self.assertTrue(transport.app_check_pending_allowed)
         self.assertEqual(transport.app_check_timeout_ms, self.profile.uds.p2_star_ms)
+        self.assertFalse(session.is_diag_exclusive)
+
+    def test_preprogramming_level1_nrc_fails_without_shortcut_to_fbl(self):
+        session = BusSession()
+        transport = PreprogrammingLevel1NrcTransport(self.profile)
+        workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
+
+        with self.assertRaisesRegex(HostToolError, "NRC 0x22"):
+            workflow.run(flash_driver=self.flash_driver, app=self.app)
+
+        self.assertNotIn(bytes.fromhex("10 02"), transport.requests)
+        self.assertNotIn(bytes.fromhex("27 09"), transport.requests)
         self.assertFalse(session.is_diag_exclusive)
 
     def test_flash_workflow_emits_human_readable_progress_stages(self):
@@ -89,8 +118,9 @@ class FlashWorkflowFakeTests(unittest.TestCase):
 
         messages = [event.message for event in progress_events]
         percents = [event.percent for event in progress_events]
-        self.assertIn("进入 App 默认会话", messages)
-        self.assertIn("等待 Boot 编程会话", messages)
+        self.assertIn("进入默认会话", messages)
+        self.assertIn("执行刷写条件检查", messages)
+        self.assertIn("Boot FBL 安全访问", messages)
         self.assertIn("擦除 App 区域", messages)
         self.assertIn("等待 App DID 恢复通信", messages)
         self.assertEqual(percents[0], 5)
@@ -132,6 +162,7 @@ class FlashWorkflowFakeTests(unittest.TestCase):
                 expect_prefix=None,
                 timeout_ms=None,
                 allow_response_pending=False,
+                ignore_invalid_responses=False,
                 cancel_token=None,
             ):
                 if uds_payload.startswith(bytes.fromhex("34")):
@@ -142,6 +173,7 @@ class FlashWorkflowFakeTests(unittest.TestCase):
                     expect_prefix=expect_prefix,
                     timeout_ms=timeout_ms,
                     allow_response_pending=allow_response_pending,
+                    ignore_invalid_responses=ignore_invalid_responses,
                     cancel_token=cancel_token,
                 )
 
@@ -168,20 +200,9 @@ class FlashWorkflowFakeTests(unittest.TestCase):
         transfer_lengths = [len(req) for req in transport.requests if req.startswith(bytes([0x36]))]
         self.assertEqual(transfer_lengths[-3:], [1026, 1026, 4])
 
-    def test_erased_app_nrc22_without_boot_start_mode_fails(self):
+    def test_start_in_bootloader_reports_boot_start_but_keeps_preprogramming(self):
         session = BusSession()
-        transport = BootAlreadyRunningAfterAppNrc22Transport(self.profile)
-        workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
-
-        with self.assertRaisesRegex(HostToolError, "NRC 0x22"):
-            workflow.run(flash_driver=self.flash_driver, app=self.app)
-
-        self.assertFalse(session.is_diag_exclusive)
-        self.assertNotIn(bytes.fromhex("27 09"), transport.requests)
-
-    def test_start_in_bootloader_skips_app_preprogramming(self):
-        session = BusSession()
-        transport = BootAlreadyRunningAfterAppNrc22Transport(self.profile)
+        transport = BootDelayedTransport(self.profile)
         progress_events = []
         workflow = FlashWorkflow(
             self.profile,
@@ -195,10 +216,12 @@ class FlashWorkflowFakeTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertFalse(session.is_diag_exclusive)
+        self.assertIn(bytes.fromhex("10 01"), transport.requests)
+        self.assertIn(bytes.fromhex("10 03"), transport.requests)
+        self.assertIn(bytes.fromhex("31 01 02 03"), transport.requests)
         self.assertIn(bytes.fromhex("10 02"), transport.requests)
+        self.assertIn(bytes.fromhex("27 01"), transport.requests)
         self.assertIn(bytes.fromhex("27 09"), transport.requests)
-        self.assertNotIn(bytes.fromhex("27 01"), transport.requests)
-        self.assertNotIn(bytes.fromhex("31 01 02 03"), transport.requests)
         self.assertTrue(any("从 Bootloader 开始" in event.message for event in progress_events))
 
 
@@ -206,8 +229,8 @@ class BootDelayedTransport:
     def __init__(self, profile):
         self.profile = profile
         self.requests: list[bytes] = []
-        self._app_programming_session_seen = False
-        self.boot_session_attempts = 0
+        self.timeouts: list[int | None] = []
+        self.ignore_invalid_responses_by_request: dict[bytes, bool] = {}
         self.app_check_pending_allowed = False
         self.app_check_timeout_ms: int | None = None
 
@@ -219,18 +242,12 @@ class BootDelayedTransport:
         expect_prefix=None,
         timeout_ms=None,
         allow_response_pending=False,
+        ignore_invalid_responses=False,
         cancel_token=None,
     ):
         self.requests.append(uds_payload)
-
-        if uds_payload == bytes.fromhex("10 02"):
-            if not self._app_programming_session_seen:
-                self._app_programming_session_seen = True
-                return UdsResponse(payload=bytes.fromhex("50 02"), raw_frames=())
-            self.boot_session_attempts += 1
-            if self.boot_session_attempts < 3:
-                raise HostToolError(ErrorCategory.TRANSPORT, "LIN UDS response timeout")
-            return UdsResponse(payload=bytes.fromhex("50 02"), raw_frames=())
+        self.timeouts.append(timeout_ms)
+        self.ignore_invalid_responses_by_request[uds_payload] = ignore_invalid_responses
 
         if uds_payload == bytes.fromhex("10 01"):
             return UdsResponse(payload=bytes.fromhex("50 01"), raw_frames=())
@@ -242,6 +259,8 @@ class BootDelayedTransport:
             return UdsResponse(payload=bytes.fromhex("67 02"), raw_frames=())
         if uds_payload == bytes.fromhex("31 01 02 03"):
             return UdsResponse(payload=bytes.fromhex("71 01 02 03 00"), raw_frames=())
+        if uds_payload == bytes.fromhex("10 02"):
+            return UdsResponse(payload=bytes.fromhex("50 02"), raw_frames=())
         if uds_payload == bytes.fromhex("27 09"):
             return UdsResponse(payload=bytes.fromhex("67 09 24 68 35 79"), raw_frames=())
         if uds_payload.startswith(bytes.fromhex("27 0A")):
@@ -269,7 +288,7 @@ class BootDelayedTransport:
         raise AssertionError(f"unexpected UDS request: {uds_payload.hex(' ')}")
 
 
-class BootAlreadyRunningAfterAppNrc22Transport(BootDelayedTransport):
+class PreprogrammingLevel1NrcTransport(BootDelayedTransport):
     def request(
         self,
         uds_payload: bytes,
@@ -278,20 +297,19 @@ class BootAlreadyRunningAfterAppNrc22Transport(BootDelayedTransport):
         expect_prefix=None,
         timeout_ms=None,
         allow_response_pending=False,
+        ignore_invalid_responses=False,
         cancel_token=None,
     ):
         if uds_payload == bytes.fromhex("27 01"):
             self.requests.append(uds_payload)
             raise HostToolError(ErrorCategory.UDS, "received NRC 0x22")
-        if uds_payload == bytes.fromhex("10 02"):
-            self.requests.append(uds_payload)
-            self.boot_session_attempts += 1
-            return UdsResponse(payload=bytes.fromhex("50 02"), raw_frames=())
+
         return super().request(
             uds_payload,
             expect_sid=expect_sid,
             expect_prefix=expect_prefix,
             timeout_ms=timeout_ms,
             allow_response_pending=allow_response_pending,
+            ignore_invalid_responses=ignore_invalid_responses,
             cancel_token=cancel_token,
         )

@@ -3,6 +3,7 @@ import unittest
 from unified_can_lin_host_tool.adapters.fake import FakeLinAdapter
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.profile import load_profile
+from unified_can_lin_host_tool.transport.base import LinFrame
 from unified_can_lin_host_tool.transport.lin_diag import LinDiagTransport
 
 
@@ -74,6 +75,39 @@ class LinDiagTransportTests(unittest.TestCase):
         self.assertEqual(response.payload, bytes.fromhex("67 09 24 68 35 79"))
         self.assertEqual(len(response.raw_frames), 2)
 
+    def test_response_with_wrong_id_is_rejected(self):
+        profile = load_profile("profiles/e68_lin_bootloader.yaml")
+        adapter = SequentialRxAdapter(
+            [
+                LinFrame(0x3F, bytes.fromhex("11 06 50 02 00 32 13 88")),
+            ]
+        )
+        transport = LinDiagTransport(adapter, profile, sleep_func=lambda _: None)
+
+        with self.assertRaises(HostToolError) as caught:
+            transport.request(bytes.fromhex("27 01"), expect_prefix=bytes.fromhex("67 01"))
+
+        self.assertEqual(caught.exception.category, ErrorCategory.TRANSPORT)
+
+    def test_reset_handoff_noise_is_skipped_until_expected_response(self):
+        profile = load_profile("profiles/e68_lin_bootloader.yaml")
+        adapter = SequentialRxAdapter(
+            [
+                LinFrame(0x3D, bytes.fromhex("00")),
+                LinFrame(0x3D, bytes.fromhex("11 06 50 02 00 32 13 88")),
+            ]
+        )
+        transport = LinDiagTransport(adapter, profile, sleep_func=lambda _: None)
+
+        response = transport.request(
+            bytes.fromhex("10 02"),
+            expect_prefix=bytes.fromhex("50 02"),
+            ignore_invalid_responses=True,
+        )
+
+        self.assertEqual(response.payload, bytes.fromhex("50 02 00 32 13 88"))
+        self.assertEqual(len(response.raw_frames), 2)
+
     def test_empty_single_frame_response_is_classified_error(self):
         profile = load_profile("profiles/e68_lin_bootloader.yaml")
         adapter = FakeLinAdapter(responses=[(0x3D, bytes.fromhex("11 00 FF FF FF FF FF FF"))])
@@ -83,3 +117,17 @@ class LinDiagTransportTests(unittest.TestCase):
             transport.request(bytes.fromhex("10 01"), expect_sid=0x50)
 
         self.assertEqual(caught.exception.category, ErrorCategory.TRANSPORT)
+
+
+class SequentialRxAdapter:
+    def __init__(self, responses: list[LinFrame]) -> None:
+        self.sent_frames: list[tuple[int, bytes]] = []
+        self._responses = responses
+
+    def send_lin_frame(self, frame_id: int, data: bytes) -> None:
+        self.sent_frames.append((frame_id, data))
+
+    def receive_lin_frame(self, frame_id: int, timeout_ms: int) -> LinFrame | None:
+        if not self._responses:
+            return None
+        return self._responses.pop(0)
