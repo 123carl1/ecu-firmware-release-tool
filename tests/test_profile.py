@@ -23,6 +23,8 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(profile.bus.functional_request_id, 0x7DF)
         self.assertIsNone(profile.bus.nad)
         self.assertEqual(profile.bus.padding, 0xAA)
+        self.assertEqual(profile.seedkey.app_level1, "as5pr_level1")
+        self.assertEqual(profile.seedkey.boot_fbl, "as5pr_fbl")
         self.assertEqual(profile.uds.max_transfer_payload, 62)
 
     def test_profile_rejects_transfer_payload_that_exceeds_isotp_length(self):

@@ -22,7 +22,7 @@ uds:
   poll_timeout_ms: 300
   poll_gap_ms: 5
 seedkey:
-  app_level1: e68_level1
-  boot_fbl: e68_fbl
+  app_level1: as5pr_level1
+  boot_fbl: as5pr_fbl
 workflow:
   name: as5pr_can_bootloader_v1

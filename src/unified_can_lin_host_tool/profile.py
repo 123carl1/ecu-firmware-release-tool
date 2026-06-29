@@ -178,14 +178,20 @@ def _validate_profile(profile: ToolProfile) -> None:
             ErrorCategory.PROFILE,
             "uds.max_transfer_payload must fit ISO-TP 12-bit length after SID and block sequence",
         )
-    if profile.seedkey.app_level1 != "e68_level1":
-        raise HostToolError(ErrorCategory.PROFILE, "seedkey.app_level1 must be e68_level1")
-    if profile.seedkey.boot_fbl != "e68_fbl":
-        raise HostToolError(ErrorCategory.PROFILE, "seedkey.boot_fbl must be e68_fbl")
     if profile.bus.type == "LIN" and profile.workflow.name != "e68_lin_bootloader_v1":
         raise HostToolError(ErrorCategory.PROFILE, "workflow.name must be e68_lin_bootloader_v1")
     if profile.bus.type == "CAN" and profile.workflow.name != "as5pr_can_bootloader_v1":
         raise HostToolError(ErrorCategory.PROFILE, "workflow.name must be as5pr_can_bootloader_v1")
+    if profile.workflow.name == "e68_lin_bootloader_v1":
+        if profile.seedkey.app_level1 != "e68_level1":
+            raise HostToolError(ErrorCategory.PROFILE, "seedkey.app_level1 must be e68_level1")
+        if profile.seedkey.boot_fbl != "e68_fbl":
+            raise HostToolError(ErrorCategory.PROFILE, "seedkey.boot_fbl must be e68_fbl")
+    if profile.workflow.name == "as5pr_can_bootloader_v1":
+        if profile.seedkey.app_level1 != "as5pr_level1":
+            raise HostToolError(ErrorCategory.PROFILE, "seedkey.app_level1 must be as5pr_level1")
+        if profile.seedkey.boot_fbl != "as5pr_fbl":
+            raise HostToolError(ErrorCategory.PROFILE, "seedkey.boot_fbl must be as5pr_fbl")
 
 
 def _validate_byte(name: str, value: int) -> None:

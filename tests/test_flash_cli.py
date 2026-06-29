@@ -5,7 +5,7 @@ from io import StringIO
 from pathlib import Path
 
 from unified_can_lin_host_tool.cli.flash_e68_lin import main
-from unified_can_lin_host_tool.cli.flash_e68_can import main as can_main
+from unified_can_lin_host_tool.cli.flash_as5pr_can import main as can_main
 
 
 class FlashCliTests(unittest.TestCase):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from unified_can_lin_host_tool.as5pr.crc32 import as5pr_crc32
 from unified_can_lin_host_tool.e68.crc32 import e68_crc32
 from unified_can_lin_host_tool.profile import ToolProfile
 from unified_can_lin_host_tool.transport.base import CanFrame, LinFrame
@@ -161,7 +162,7 @@ class FakeCanAdapter:
         add(_request_download_response(profile), request_len=11)
         for block_sequence, chunk_len in _block_sequence_lengths(flash_driver_data, profile.uds.max_transfer_payload):
             add(bytes([0x76, block_sequence]), request_len=2 + chunk_len)
-        add(bytes([0x77]) + e68_crc32(flash_driver_data).to_bytes(4, "big"), request_len=5)
+        add(bytes([0x77]) + as5pr_crc32(flash_driver_data).to_bytes(4, "big"), request_len=5)
         add(bytes.fromhex("71 01 02 02 00"), request_len=4)
 
         responses.append((response_id, _can_flow_control(padding)))
@@ -171,7 +172,7 @@ class FakeCanAdapter:
         add(_request_download_response(profile), request_len=11)
         for block_sequence, chunk_len in _block_sequence_lengths(app_data, profile.uds.max_transfer_payload):
             add(bytes([0x76, block_sequence]), request_len=2 + chunk_len)
-        add(bytes([0x77]) + e68_crc32(app_data).to_bytes(4, "big"), request_len=5)
+        add(bytes([0x77]) + as5pr_crc32(app_data).to_bytes(4, "big"), request_len=5)
         add(bytes.fromhex("7F 31 78"), request_len=4)
         add(bytes.fromhex("71 01 FF 01 00"), request_len=0)
         add(bytes.fromhex("51 01"), request_len=2)
