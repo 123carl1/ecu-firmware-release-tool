@@ -5,6 +5,7 @@ from io import StringIO
 from pathlib import Path
 
 from unified_can_lin_host_tool.cli.flash_e68_lin import main
+from unified_can_lin_host_tool.cli.flash_e68_can import main as can_main
 
 
 class FlashCliTests(unittest.TestCase):
@@ -138,6 +139,75 @@ class FlashCliTests(unittest.TestCase):
         self.assertIn("tsmaster_project_dir=D:\\project\\TS_Master", text)
         self.assertIn("tsmaster_hw_channel=3", text)
         self.assertIn("tsmaster_close_mode=skip", text)
+
+    def test_fake_can_dry_run_writes_trace_and_reports_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = can_main(
+                    [
+                        "--adapter",
+                        "fake",
+                        "--profile",
+                        "profiles/as5pr_can_bootloader.yaml",
+                        "--flash-driver",
+                        "tests/fixtures/flash_driver_18b.bin",
+                        "--app",
+                        "tests/fixtures/app_20b.bin",
+                        "--log-dir",
+                        tmp,
+                        "--dry-run",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("FLASH SUCCESS", output.getvalue())
+            logs = list(Path(tmp).glob("trace_*.log"))
+            self.assertEqual(len(logs), 1)
+            trace_text = logs[0].read_text(encoding="utf-8")
+            self.assertIn("CAN id=0x701", trace_text)
+            self.assertIn("CAN id=0x709", trace_text)
+
+    def test_tsmaster_can_dry_run_accepts_mapping_arguments(self):
+        output = StringIO()
+
+        with redirect_stdout(output):
+            exit_code = can_main(
+                [
+                    "--adapter",
+                    "tsmaster",
+                    "--profile",
+                    "profiles/as5pr_can_bootloader.yaml",
+                    "--flash-driver",
+                    "tests/fixtures/flash_driver_18b.bin",
+                    "--app",
+                    "tests/fixtures/app_20b.bin",
+                    "--dry-run",
+                    "--tsmaster-dll",
+                    "D:/custom/TSMaster.dll",
+                    "--tsmaster-app",
+                    "MyCanApp",
+                    "--tsmaster-project-dir",
+                    "D:/project/TS_Master",
+                    "--tsmaster-app-channel",
+                    "1",
+                    "--tsmaster-can-channel-count",
+                    "2",
+                    "--tsmaster-base-hw-channel",
+                    "0",
+                    "--tsmaster-hw-channel",
+                    "1",
+                ]
+            )
+
+        text = output.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("DRY RUN", text)
+        self.assertIn("can_request_id=0x701", text)
+        self.assertIn("max_transfer_payload=62", text)
+        self.assertIn("tsmaster_app=MyCanApp", text)
+        self.assertIn("tsmaster_can_channel_count=2", text)
 
 
 def _write_s19(path: Path, base_address: int, data: bytes) -> None:

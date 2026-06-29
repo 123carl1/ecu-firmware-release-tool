@@ -184,6 +184,90 @@ class FlashWorkflowFakeTests(unittest.TestCase):
         with self.assertRaisesRegex(HostToolError, "maxNumberOfBlockLength"):
             workflow.run(flash_driver=self.flash_driver, app=self.app)
 
+    def test_request_download_accepts_one_byte_max_block_length(self):
+        class OneByteBlockTransport(BootDelayedTransport):
+            def request(
+                self,
+                uds_payload: bytes,
+                *,
+                expect_sid=None,
+                expect_prefix=None,
+                timeout_ms=None,
+                allow_response_pending=False,
+                ignore_invalid_responses=False,
+                cancel_token=None,
+            ):
+                if uds_payload.startswith(bytes.fromhex("34")):
+                    return UdsResponse(payload=bytes.fromhex("74 10 40"), raw_frames=())
+                return super().request(
+                    uds_payload,
+                    expect_sid=expect_sid,
+                    expect_prefix=expect_prefix,
+                    timeout_ms=timeout_ms,
+                    allow_response_pending=allow_response_pending,
+                    ignore_invalid_responses=ignore_invalid_responses,
+                    cancel_token=cancel_token,
+                )
+
+        profile = load_profile("profiles/as5pr_can_bootloader.yaml")
+        flash_driver = load_bin_image(
+            Path("tests/fixtures/flash_driver_18b.bin"),
+            profile.memory.flash_driver_ram,
+            profile.memory.flash_driver_max_size,
+        )
+        app = load_bin_image(
+            Path("tests/fixtures/app_20b.bin"),
+            profile.memory.app_start,
+            profile.memory.app_size,
+        )
+        session = BusSession()
+        transport = OneByteBlockTransport(profile)
+        workflow = FlashWorkflow(profile, transport, session, sleep_func=lambda _: None)
+
+        result = workflow.run(flash_driver=flash_driver, app=app)
+
+        self.assertTrue(result.success)
+
+    def test_app_did_wait_tolerates_reset_window_nrc(self):
+        class ResetWindowNrcTransport(BootDelayedTransport):
+            def __init__(self, profile):
+                super().__init__(profile)
+                self.did_attempts = 0
+
+            def request(
+                self,
+                uds_payload: bytes,
+                *,
+                expect_sid=None,
+                expect_prefix=None,
+                timeout_ms=None,
+                allow_response_pending=False,
+                ignore_invalid_responses=False,
+                cancel_token=None,
+            ):
+                if uds_payload == bytes.fromhex("22 30 00"):
+                    self.did_attempts += 1
+                    if self.did_attempts == 1:
+                        raise HostToolError(ErrorCategory.UDS, "received NRC 0x11")
+                return super().request(
+                    uds_payload,
+                    expect_sid=expect_sid,
+                    expect_prefix=expect_prefix,
+                    timeout_ms=timeout_ms,
+                    allow_response_pending=allow_response_pending,
+                    ignore_invalid_responses=ignore_invalid_responses,
+                    cancel_token=cancel_token,
+                )
+
+        session = BusSession()
+        transport = ResetWindowNrcTransport(self.profile)
+        workflow = FlashWorkflow(self.profile, transport, session, sleep_func=lambda _: None)
+
+        result = workflow.run(flash_driver=self.flash_driver, app=self.app)
+
+        self.assertTrue(result.success)
+        self.assertEqual(transport.did_attempts, 2)
+
     def test_app_image_is_split_into_1024_byte_transfer_data_chunks(self):
         session = BusSession()
         transport = BootDelayedTransport(self.profile)

@@ -14,6 +14,17 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(profile.uds.frame_gap_ms, 12)
         self.assertEqual(profile.uds.max_transfer_payload, 1024)
 
+    def test_load_as5pr_can_profile(self):
+        profile = load_profile(Path("profiles/as5pr_can_bootloader.yaml"))
+
+        self.assertEqual(profile.bus.type, "CAN")
+        self.assertEqual(profile.bus.request_id, 0x701)
+        self.assertEqual(profile.bus.response_id, 0x709)
+        self.assertEqual(profile.bus.functional_request_id, 0x7DF)
+        self.assertIsNone(profile.bus.nad)
+        self.assertEqual(profile.bus.padding, 0xAA)
+        self.assertEqual(profile.uds.max_transfer_payload, 62)
+
     def test_profile_rejects_transfer_payload_that_exceeds_isotp_length(self):
         raw = {
             "name": "bad",

@@ -1,0 +1,28 @@
+name: AS5PR CAN Bootloader
+bus:
+  type: CAN
+  baudrate: 500000
+  request_id: 0x701
+  response_id: 0x709
+  functional_request_id: 0x7DF
+  padding: 0xAA
+memory:
+  app_start: 0x00007000
+  app_size: 0x00019000
+  app_end: 0x00020000
+  flash_driver_ram: 0x20001000
+  flash_driver_max_size: 0x00002000
+  page_size: 512
+uds:
+  p2_ms: 50
+  p2_star_ms: 5000
+  max_transfer_payload: 62
+  request_download_format: 0x44
+  frame_gap_ms: 0
+  poll_timeout_ms: 300
+  poll_gap_ms: 5
+seedkey:
+  app_level1: e68_level1
+  boot_fbl: e68_fbl
+workflow:
+  name: as5pr_can_bootloader_v1

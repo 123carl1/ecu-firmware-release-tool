@@ -10,10 +10,22 @@ class LinFrame:
     data: bytes
 
 
+@dataclass(frozen=True)
+class CanFrame:
+    can_id: int
+    data: bytes
+
+
 class BusAdapter(Protocol):
     def send_lin_frame(self, frame_id: int, data: bytes) -> None:
         ...
 
     def receive_lin_frame(self, frame_id: int, timeout_ms: int) -> LinFrame | None:
+        ...
+
+    def send_can_frame(self, can_id: int, data: bytes) -> None:
+        ...
+
+    def receive_can_frame(self, can_id: int, timeout_ms: int) -> CanFrame | None:
         ...
 

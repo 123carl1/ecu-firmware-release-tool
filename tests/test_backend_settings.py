@@ -13,7 +13,8 @@ class BackendSettingsTest(unittest.TestCase):
         settings = default_backend_settings()
 
         self.assertIsInstance(settings.tsmaster, TsmasterSettings)
-        self.assertEqual(settings.tsmaster.dll_path, "D:/software/TSMaster/bin64/TSMaster.dll")
+        self.assertEqual(settings.tsmaster.dll_path, "TSMaster.dll")
+        self.assertIsNone(settings.tsmaster.project_dir)
         self.assertEqual(settings.tsmaster.app_channel, 0)
         self.assertEqual(settings.tsmaster.hw_index, 0)
         self.assertEqual(settings.tsmaster.hw_channel, 0)

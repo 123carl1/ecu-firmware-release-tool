@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from ctypes import (
     POINTER,
     Structure,
@@ -15,15 +16,18 @@ from ctypes import (
 )
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic, sleep
 
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
-from unified_can_lin_host_tool.transport.base import LinFrame
+from unified_can_lin_host_tool.transport.base import CanFrame, LinFrame
 
-DEFAULT_TSMASTER_DLL = "D:/software/TSMaster/bin64/TSMaster.dll"
+DEFAULT_TSMASTER_DLL = os.environ.get("TSMASTER_DLL", "TSMaster.dll")
+APP_CAN = 0
 APP_LIN = 1
 TS_USB_DEVICE = 3
 LIN_MASTER = 0
 LIN_PROTOCOL_21 = 2
+CAN_CLASSIC_DLC = 8
 
 
 class TLIBHWInfo(Structure):
@@ -52,6 +56,19 @@ class TLIBLIN(Structure):
     ]
 
 
+class TLIBCAN(Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("FIdxChn", c_uint8),
+        ("FProperties", c_uint8),
+        ("FDLC", c_uint8),
+        ("FReserved", c_uint8),
+        ("FIdentifier", c_int32),
+        ("FTimeUs", c_int64),
+        ("FData", c_uint8 * 8),
+    ]
+
+
 @dataclass(frozen=True)
 class TsmasterDevice:
     index: int
@@ -74,6 +91,8 @@ class TsmasterAdapter:
         hw_subtype: int = 11,
         hw_index: int = 0,
         hw_channel: int = 0,
+        can_channel_count: int | None = None,
+        base_hw_channel: int | None = None,
         baud_kbps: float = 19.2,
     ) -> None:
         self.dll_path = dll_path
@@ -84,6 +103,8 @@ class TsmasterAdapter:
         self.hw_subtype = hw_subtype
         self.hw_index = hw_index
         self.hw_channel = hw_channel
+        self.can_channel_count = can_channel_count
+        self.base_hw_channel = base_hw_channel
         self.baud_kbps = baud_kbps
         try:
             self._dll = WinDLL(dll_path)
@@ -91,6 +112,7 @@ class TsmasterAdapter:
             raise HostToolError(ErrorCategory.DEVICE, f"load TSMaster DLL failed: {dll_path}") from exc
         self._bind()
         self._opened = False
+        self._opened_bus: str | None = None
 
     @classmethod
     def probe(
@@ -164,6 +186,51 @@ class TsmasterAdapter:
                 self._tsfifo_clear_lin_receive_buffers(self.app_channel),
             )
             self._opened = True
+            self._opened_bus = "LIN"
+        except Exception:
+            self.close()
+            raise
+
+    def open_can(self) -> None:
+        app_name = self.app_name.encode("utf-8")
+        can_channel_count = self.can_channel_count
+        base_hw_channel = self.base_hw_channel
+
+        if can_channel_count is None:
+            can_channel_count = max(1, self.app_channel + 1)
+        if can_channel_count <= self.app_channel:
+            raise HostToolError(ErrorCategory.DEVICE, "CAN channel count must cover the selected app channel")
+        if base_hw_channel is None:
+            base_hw_channel = self.hw_channel - self.app_channel
+
+        self._initialize()
+        try:
+            self._must("tsapp_set_can_channel_count", self._tsapp_set_can_channel_count(can_channel_count))
+            self._must("tsapp_set_lin_channel_count", self._tsapp_set_lin_channel_count(0))
+            for current_app_channel in range(can_channel_count):
+                current_hw_channel = base_hw_channel + current_app_channel
+                self._must(
+                    f"tsapp_set_mapping_verbose(CAN{current_app_channel})",
+                    self._tsapp_set_mapping_verbose(
+                        app_name,
+                        APP_CAN,
+                        current_app_channel,
+                        self.hw_name.encode("utf-8"),
+                        TS_USB_DEVICE,
+                        self.hw_subtype,
+                        self.hw_index,
+                        current_hw_channel,
+                        True,
+                    ),
+                )
+                self._must(
+                    f"tsapp_configure_baudrate_can({current_app_channel})",
+                    self._tsapp_configure_baudrate_can(current_app_channel, c_float(self.baud_kbps), False, False),
+                )
+            self._must("tsapp_connect", self._tsapp_connect())
+            self._tsfifo_enable_receive_fifo()
+            self._opened = True
+            self._opened_bus = "CAN"
         except Exception:
             self.close()
             raise
@@ -175,16 +242,18 @@ class TsmasterAdapter:
                     self._tsfifo_disable_receive_fifo()
                 except Exception:
                     pass
-                try:
-                    self._tslin_stop_lin_channel(self.app_channel)
-                except Exception:
-                    pass
+                if self._opened_bus == "LIN":
+                    try:
+                        self._tslin_stop_lin_channel(self.app_channel)
+                    except Exception:
+                        pass
                 try:
                     self._tsapp_disconnect()
                 except Exception:
                     pass
         finally:
             self._opened = False
+            self._opened_bus = None
             self._finalize()
 
     def send_lin_frame(self, frame_id: int, data: bytes) -> None:
@@ -211,6 +280,43 @@ class TsmasterAdapter:
         if code != 0 or msg.FDLC == 0:
             return None
         return LinFrame(frame_id=msg.FIdentifier, data=bytes(msg.FData[index] for index in range(msg.FDLC)))
+
+    def send_can_frame(self, can_id: int, data: bytes) -> None:
+        if len(data) != CAN_CLASSIC_DLC:
+            raise HostToolError(ErrorCategory.TRANSPORT, "TSMaster CAN frame data must be 8 bytes")
+        msg = TLIBCAN()
+        msg.FIdxChn = self.app_channel
+        msg.FProperties = 0
+        msg.FDLC = CAN_CLASSIC_DLC
+        msg.FIdentifier = can_id
+        for index, value in enumerate(data):
+            msg.FData[index] = value
+        self._must("tsapp_transmit_can_sync", self._tsapp_transmit_can_sync(byref(msg), 1000))
+
+    def receive_can_frame(self, can_id: int, timeout_ms: int) -> CanFrame | None:
+        deadline = monotonic() + timeout_ms / 1000.0
+
+        while monotonic() <= deadline:
+            count = c_int32(0)
+            self._must(
+                "tsfifo_read_can_rx_buffer_frame_count",
+                self._tsfifo_read_can_rx_buffer_frame_count(self.app_channel, byref(count)),
+            )
+            if count.value > 0:
+                size = c_int32(count.value)
+                buffer = (TLIBCAN * size.value)()
+                self._must(
+                    "tsfifo_receive_can_msgs",
+                    self._tsfifo_receive_can_msgs(buffer, byref(size), self.app_channel, False),
+                )
+                for index in range(size.value):
+                    msg = buffer[index]
+                    if int(msg.FIdentifier) == can_id:
+                        data = bytes(msg.FData[item] for item in range(msg.FDLC))
+                        return CanFrame(can_id=int(msg.FIdentifier), data=data)
+            sleep(0.001)
+
+        return None
 
     def _bind(self) -> None:
         self._initialize_lib_tsmaster = self._dll.initialize_lib_tsmaster
@@ -267,6 +373,10 @@ class TsmasterAdapter:
         self._tsapp_configure_baudrate_lin.restype = c_int32
         self._tsapp_configure_baudrate_lin.argtypes = [c_int32, c_float, c_int32]
 
+        self._tsapp_configure_baudrate_can = self._dll.tsapp_configure_baudrate_can
+        self._tsapp_configure_baudrate_can.restype = c_int32
+        self._tsapp_configure_baudrate_can.argtypes = [c_int32, c_float, c_bool, c_bool]
+
         self._tsapp_connect = self._dll.tsapp_connect
         self._tsapp_connect.restype = c_int32
         self._tsapp_connect.argtypes = []
@@ -303,6 +413,10 @@ class TsmasterAdapter:
         self._tsapp_transmit_lin_async.restype = c_int32
         self._tsapp_transmit_lin_async.argtypes = [POINTER(TLIBLIN)]
 
+        self._tsapp_transmit_can_sync = self._dll.tsapp_transmit_can_sync
+        self._tsapp_transmit_can_sync.restype = c_int32
+        self._tsapp_transmit_can_sync.argtypes = [POINTER(TLIBCAN), c_int32]
+
         self._tsapp_transmit_header_and_receive_msg = self._dll.tsapp_transmit_header_and_receive_msg
         self._tsapp_transmit_header_and_receive_msg.restype = c_int32
         self._tsapp_transmit_header_and_receive_msg.argtypes = [
@@ -312,6 +426,14 @@ class TsmasterAdapter:
             POINTER(TLIBLIN),
             c_int32,
         ]
+
+        self._tsfifo_read_can_rx_buffer_frame_count = self._dll.tsfifo_read_can_rx_buffer_frame_count
+        self._tsfifo_read_can_rx_buffer_frame_count.restype = c_int32
+        self._tsfifo_read_can_rx_buffer_frame_count.argtypes = [c_int32, POINTER(c_int32)]
+
+        self._tsfifo_receive_can_msgs = self._dll.tsfifo_receive_can_msgs
+        self._tsfifo_receive_can_msgs.restype = c_int32
+        self._tsfifo_receive_can_msgs.argtypes = [POINTER(TLIBCAN), POINTER(c_int32), c_int32, c_bool]
 
         self._tslin_switch_idle_schedule_table = self._bind_optional(
             "tslin_switch_idle_schedule_table",

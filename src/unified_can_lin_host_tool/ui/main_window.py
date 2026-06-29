@@ -32,10 +32,8 @@ from unified_can_lin_host_tool.profile import load_profile
 from unified_can_lin_host_tool.ui.models import UiChannel, UiDevice, WorkerEvent
 from unified_can_lin_host_tool.ui.workers import ConnectWorker, DeviceScanWorker, FlashWorker, UdsWorker
 
-DEFAULT_FLASH_DRIVER_PATH = Path(
-    "D:/01_WorkProgram/Company_Program/10_AI_Adapted_Seat/DAU_FM33_HT/artifacts/release/e68_flash_driver_auth.s19"
-)
-DEFAULT_APP_PATH = Path("D:/01_WorkProgram/Company_Program/10_AI_Adapted_Seat/DAU_FM33_HT/artifacts/release/dau_fm33_auth.s19")
+DEFAULT_FLASH_DRIVER_PATH = Path("artifacts/release/e68_flash_driver_auth.s19")
+DEFAULT_APP_PATH = Path("artifacts/release/dau_fm33_auth.s19")
 FIRMWARE_FILE_FILTER = "S19 Files (*.s19 *.srec *.mot);;Binary Files (*.bin);;All Files (*)"
 
 

@@ -175,7 +175,7 @@ class FlashWorkflow:
                 )
                 return
             except HostToolError as exc:
-                if exc.category != ErrorCategory.TRANSPORT:
+                if exc.category not in (ErrorCategory.TRANSPORT, ErrorCategory.UDS):
                     raise
                 last_error = exc
                 self._sleep(self._profile.uds.poll_gap_ms / 1000.0)
@@ -261,16 +261,22 @@ class FlashWorkflow:
             + start_address.to_bytes(4, "big")
             + size.to_bytes(4, "big")
         )
-        response = self._request(payload, expect_prefix=bytes.fromhex("74 20"), cancel_token=cancel_token)
+        response = self._request(payload, expect_prefix=bytes.fromhex("74"), cancel_token=cancel_token)
         self._validate_request_download_response(response.payload)
 
     def _validate_request_download_response(self, payload: bytes) -> None:
-        if len(payload) < 4:
+        if len(payload) < 3:
             raise HostToolError(ErrorCategory.UDS, "RequestDownload response is too short")
-        if payload[0] != 0x74 or payload[1] != 0x20:
+        if payload[0] != 0x74:
             raise HostToolError(ErrorCategory.UDS, "RequestDownload response has invalid header")
 
-        max_number_of_block_length = int.from_bytes(payload[2:4], "big")
+        mbl_byte_count = (payload[1] >> 4) & 0x0F
+        if ((payload[1] & 0x0F) != 0) or (mbl_byte_count == 0) or (mbl_byte_count > 4):
+            raise HostToolError(ErrorCategory.UDS, "RequestDownload response has invalid length format")
+        if len(payload) != (2 + mbl_byte_count):
+            raise HostToolError(ErrorCategory.UDS, "RequestDownload response length does not match length format")
+
+        max_number_of_block_length = int.from_bytes(payload[2 : 2 + mbl_byte_count], "big")
         required = self._profile.uds.max_transfer_payload + 2
         if max_number_of_block_length < required:
             raise HostToolError(

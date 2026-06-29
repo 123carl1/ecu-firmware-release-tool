@@ -16,7 +16,9 @@ class BusProfile:
     baudrate: int
     request_id: int
     response_id: int
-    nad: int
+    nad: int | None
+    functional_request_id: int | None = None
+    padding: int = 0xFF
 
 
 @dataclass(frozen=True)
@@ -63,14 +65,17 @@ class ToolProfile:
 
 def load_profile(source: str | Path | Mapping[str, Any]) -> ToolProfile:
     raw = _load_raw_profile(source)
+    bus_section = _required_section(raw, "bus")
     profile = ToolProfile(
         name=str(_required(raw, "name")),
         bus=BusProfile(
-            type=str(_required_section(raw, "bus")["type"]),
+            type=str(_required(bus_section, "type")),
             baudrate=_required_int(raw, "bus", "baudrate"),
             request_id=_required_int(raw, "bus", "request_id"),
             response_id=_required_int(raw, "bus", "response_id"),
-            nad=_required_int(raw, "bus", "nad"),
+            nad=_optional_int(raw, "bus", "nad"),
+            functional_request_id=_optional_int(raw, "bus", "functional_request_id"),
+            padding=_optional_int(raw, "bus", "padding", default=0xFF) or 0xFF,
         ),
         memory=MemoryProfile(
             app_start=_required_int(raw, "memory", "app_start"),
@@ -138,13 +143,31 @@ def _required_int(raw: Mapping[str, Any], section: str, key: str) -> int:
     return value
 
 
-def _validate_profile(profile: ToolProfile) -> None:
-    if profile.bus.type != "LIN":
-        raise HostToolError(ErrorCategory.PROFILE, "bus.type must be LIN")
+def _optional_int(raw: Mapping[str, Any], section: str, key: str, *, default: int | None = None) -> int | None:
+    section_value = _required_section(raw, section)
+    if key not in section_value:
+        return default
+    value = section_value[key]
+    if not isinstance(value, int):
+        raise HostToolError(ErrorCategory.PROFILE, f"profile field must be int: {section}.{key}")
+    return value
 
-    _validate_byte("bus.request_id", profile.bus.request_id)
-    _validate_byte("bus.response_id", profile.bus.response_id)
-    _validate_byte("bus.nad", profile.bus.nad)
+
+def _validate_profile(profile: ToolProfile) -> None:
+    if profile.bus.type == "LIN":
+        _validate_byte("bus.request_id", profile.bus.request_id)
+        _validate_byte("bus.response_id", profile.bus.response_id)
+        if profile.bus.nad is None:
+            raise HostToolError(ErrorCategory.PROFILE, "missing profile field: bus.nad")
+        _validate_byte("bus.nad", profile.bus.nad)
+    elif profile.bus.type == "CAN":
+        _validate_can_id("bus.request_id", profile.bus.request_id)
+        _validate_can_id("bus.response_id", profile.bus.response_id)
+        if profile.bus.functional_request_id is not None:
+            _validate_can_id("bus.functional_request_id", profile.bus.functional_request_id)
+        _validate_byte("bus.padding", profile.bus.padding)
+    else:
+        raise HostToolError(ErrorCategory.PROFILE, "bus.type must be LIN or CAN")
 
     if profile.memory.app_start + profile.memory.app_size != profile.memory.app_end:
         raise HostToolError(ErrorCategory.PROFILE, "memory app range is inconsistent")
@@ -153,16 +176,23 @@ def _validate_profile(profile: ToolProfile) -> None:
     if not 1 <= profile.uds.max_transfer_payload <= (0xFFF - 2):
         raise HostToolError(
             ErrorCategory.PROFILE,
-            "uds.max_transfer_payload must fit LIN ISO-TP 12-bit length after SID and block sequence",
+            "uds.max_transfer_payload must fit ISO-TP 12-bit length after SID and block sequence",
         )
     if profile.seedkey.app_level1 != "e68_level1":
         raise HostToolError(ErrorCategory.PROFILE, "seedkey.app_level1 must be e68_level1")
     if profile.seedkey.boot_fbl != "e68_fbl":
         raise HostToolError(ErrorCategory.PROFILE, "seedkey.boot_fbl must be e68_fbl")
-    if profile.workflow.name != "e68_lin_bootloader_v1":
+    if profile.bus.type == "LIN" and profile.workflow.name != "e68_lin_bootloader_v1":
         raise HostToolError(ErrorCategory.PROFILE, "workflow.name must be e68_lin_bootloader_v1")
+    if profile.bus.type == "CAN" and profile.workflow.name != "as5pr_can_bootloader_v1":
+        raise HostToolError(ErrorCategory.PROFILE, "workflow.name must be as5pr_can_bootloader_v1")
 
 
 def _validate_byte(name: str, value: int) -> None:
     if not 0 <= value <= 0xFF:
         raise HostToolError(ErrorCategory.PROFILE, f"{name} must be in 0x00..0xFF")
+
+
+def _validate_can_id(name: str, value: int) -> None:
+    if not 0 <= value <= 0x7FF:
+        raise HostToolError(ErrorCategory.PROFILE, f"{name} must be an 11-bit CAN ID")

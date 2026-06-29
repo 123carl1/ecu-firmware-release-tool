@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
 class TsmasterSettings:
-    dll_path: str = "D:/software/TSMaster/bin64/TSMaster.dll"
+    dll_path: str = field(default_factory=lambda: os.environ.get("TSMASTER_DLL", "TSMaster.dll"))
     app_name: str = "TSMaster"
-    project_dir: str | None = "D:/01_WorkProgram/Company_Program/10_AI_Adapted_Seat/DAU_FM33_HT/上位机"
+    project_dir: str | None = None
     app_channel: int = 0
     hw_name: str = "TC1016"
     hw_subtype: int = 11
@@ -34,7 +35,7 @@ class TsmasterSettings:
 @dataclass(frozen=True)
 class Usb2xxxSettings:
     # M2B will verify the exact SDK install path with real hardware.
-    dll_path: str = "D:/software/USB2XXX/USB2XXX.dll"
+    dll_path: str = field(default_factory=lambda: os.environ.get("USB2XXX_DLL", "USB2XXX.dll"))
     device_index: int = 0
     channel_index: int = 0
     baudrate: int = 19200
