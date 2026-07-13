@@ -21,7 +21,19 @@ from time import monotonic, sleep
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.transport.base import CanFrame, LinFrame
 
-DEFAULT_TSMASTER_DLL = os.environ.get("TSMASTER_DLL", "TSMaster.dll")
+def _default_tsmaster_dll() -> str:
+    configured = os.environ.get("TSMASTER_DLL")
+    if configured:
+        return configured
+    candidates = (
+        Path(r"D:\software\TSMaster\bin64\TSMaster.dll"),
+        Path(r"C:\Program Files\TOSUN\TSMaster\bin64\TSMaster.dll"),
+        Path(r"C:\Program Files\TSMaster\bin64\TSMaster.dll"),
+    )
+    return str(next((item for item in candidates if item.is_file()), Path("TSMaster.dll")))
+
+
+DEFAULT_TSMASTER_DLL = _default_tsmaster_dll()
 APP_CAN = 0
 APP_LIN = 1
 TS_USB_DEVICE = 3

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 
 from unified_can_lin_host_tool.adapters.tsmaster import DEFAULT_TSMASTER_DLL, TsmasterAdapter
 from unified_can_lin_host_tool.as5pr.ota_state_machine import As5prOtaStateMachine, OtaResultStatus
@@ -87,6 +88,10 @@ def _open_transport(args, config, trace):
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
     args = build_parser().parse_args(argv)
     adapter = None
     trace = None
