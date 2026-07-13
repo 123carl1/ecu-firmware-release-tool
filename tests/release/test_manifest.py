@@ -9,6 +9,7 @@ import yaml
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from unified_can_lin_host_tool.core.errors import HostToolError
 from unified_can_lin_host_tool.release.manifest import (
     load_verified_manifest,
     resolve_bundle_resource,
@@ -87,6 +88,23 @@ def test_signature_fault_fails_before_yaml_parse_or_resource_access(tmp_path, mo
         load_verified_manifest(root, public_raw)
 
 
+@pytest.mark.parametrize("length", [0, 31, 33])
+def test_raw_public_key_must_be_exactly_32_bytes(tmp_path, length):
+    root, _, _, _ = _bundle(tmp_path)
+    with pytest.raises(ValueError, match="signature public key"):
+        load_verified_manifest(root, b"x" * length)
+
+
+def test_signed_non_utf8_manifest_is_rejected_as_host_tool_error(tmp_path):
+    root, document, _, _ = _bundle(tmp_path)
+    raw = yaml.safe_dump(document, sort_keys=False).encode("utf-16")
+    private = Ed25519PrivateKey.generate()
+    (root / "manifest.yaml").write_bytes(raw)
+    (root / "manifest.sig").write_bytes(private.sign(raw))
+    with pytest.raises(HostToolError, match="UTF-8"):
+        load_verified_manifest(root, private.public_key())
+
+
 def test_malformed_yaml_and_schema_faults_are_rejected(tmp_path):
     root, _, _, public_raw = _bundle(tmp_path)
     private = Ed25519PrivateKey.generate()
@@ -96,6 +114,16 @@ def test_malformed_yaml_and_schema_faults_are_rejected(tmp_path):
         (root / "manifest.sig").write_bytes(private.sign(raw))
         with pytest.raises(ValueError):
             load_verified_manifest(root, public_raw)
+
+
+@pytest.mark.parametrize("fault", ["nested", "resource"])
+def test_nested_and_resource_field_types_are_rejected(tmp_path, fault):
+    def mutate(doc, _):
+        if fault == "nested": doc["memory"]["pageSize"] = "512"
+        else: doc["resources"]["boot"]["size"] = "10"
+    root, _, _, public = _bundle(tmp_path, mutate)
+    with pytest.raises(ValueError, match="wrong type"):
+        load_verified_manifest(root, public)
 
 
 @pytest.mark.parametrize("bad_path", ["/tmp/a", "C:/a", r"\\server\share\a", "../a", "x/../../a", "."])
@@ -114,26 +142,51 @@ def test_directory_resource_is_rejected(tmp_path):
     with pytest.raises(ValueError): load_verified_manifest(root, public)
 
 
-def test_symlink_and_resolved_escape_are_rejected(tmp_path):
+def test_symlink_rejection_branch_is_covered_without_host_privilege(tmp_path, monkeypatch):
+    root, _, _, public = _bundle(tmp_path)
+    original = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda path: path.name == "boot.bin" or original(path))
+    with pytest.raises(ValueError, match="symbolic link"):
+        load_verified_manifest(root, public)
+
+
+def test_resolved_escape_branch_is_covered_without_host_privilege(tmp_path, monkeypatch):
+    root, _, _, public = _bundle(tmp_path)
+    outside = tmp_path / "outside" / "boot.bin"
+    original = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda path, strict=False: outside if path.name == "boot.bin" else original(path, strict=strict))
+    with pytest.raises(ValueError, match="escapes bundle"):
+        load_verified_manifest(root, public)
+
+
+def test_real_symlink_is_rejected_when_host_allows_creation(tmp_path):
     outside = tmp_path / "outside.bin"; outside.write_bytes(b"boot-image")
-    def link(doc, root):
-        try:
-            (root / "link.bin").symlink_to(outside)
-        except OSError as exc:
-            pytest.skip(f"host cannot create symbolic links: {exc}")
-        doc["resources"]["boot"]["path"] = "link.bin"
-    root, _, _, public = _bundle(tmp_path / "s", link)
-    with pytest.raises(ValueError): load_verified_manifest(root, public)
+    root, document, _, _ = _bundle(tmp_path / "s")
+    link = root / "link.bin"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        return
+    document["resources"]["boot"]["path"] = "link.bin"
+    private = Ed25519PrivateKey.generate()
+    raw = yaml.safe_dump(document, sort_keys=False).encode()
+    (root / "manifest.yaml").write_bytes(raw)
+    (root / "manifest.sig").write_bytes(private.sign(raw))
+    with pytest.raises(ValueError, match="symbolic link"):
+        load_verified_manifest(root, private.public_key())
 
 
-@pytest.mark.parametrize("fault", ["size", "hash", "missing", "kind", "cross_bundle"])
+@pytest.mark.parametrize("fault", ["size", "hash", "missing", "kind", "missing_bundle", "missing_target", "cross_bundle", "cross_target"])
 def test_resource_integrity_and_required_roles_are_enforced(tmp_path, fault):
     def mutate(doc, _):
         if fault == "size": doc["resources"]["boot"]["size"] += 1
         elif fault == "hash": doc["resources"]["boot"]["sha256"] = "0" * 64
         elif fault == "missing": del doc["resources"]["profile"]
         elif fault == "kind": doc["resources"]["boot"]["kind"] = "profile"
-        else: doc["resources"]["boot"]["bundleId"] = "another-bundle"
+        elif fault == "missing_bundle": del doc["resources"]["boot"]["bundleId"]
+        elif fault == "missing_target": del doc["resources"]["boot"]["targetId"]
+        elif fault == "cross_bundle": doc["resources"]["boot"]["bundleId"] = "another-bundle"
+        else: doc["resources"]["boot"]["targetId"] = "another-target"
     root, _, _, public = _bundle(tmp_path, mutate)
     with pytest.raises(ValueError): load_verified_manifest(root, public)
 

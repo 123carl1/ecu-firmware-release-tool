@@ -12,6 +12,8 @@ import yaml
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
+
 
 def _frozen(value: Any) -> Any:
     if isinstance(value, dict):
@@ -116,13 +118,18 @@ def load_verified_manifest(bundle_root: Path, public_key: bytes | Ed25519PublicK
     signature = (root / "manifest.sig").read_bytes()
     if len(signature) != 64:
         raise ValueError("signature must be exactly 64 raw bytes")
+    verified_key = _public_key(public_key)
     try:
-        _public_key(public_key).verify(signature, raw)
-    except (InvalidSignature, ValueError, TypeError) as exc:
+        verified_key.verify(signature, raw)
+    except (InvalidSignature, TypeError) as exc:
         raise ValueError("signature verification failed") from exc
 
     try:
-        document = yaml.safe_load(raw)
+        manifest_text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise HostToolError(ErrorCategory.FILE, "manifest must be strict UTF-8") from exc
+    try:
+        document = yaml.safe_load(manifest_text)
     except yaml.YAMLError as exc:
         raise ValueError("manifest YAML is malformed") from exc
     if not isinstance(document, dict):
@@ -138,9 +145,9 @@ def load_verified_manifest(bundle_root: Path, public_key: bytes | Ed25519PublicK
     for resource_id, item in resource_data.items():
         if not isinstance(resource_id, str) or not isinstance(item, dict):
             raise ValueError("resource entries must be named mappings")
-        _require_fields(item, {"path": str, "size": int, "sha256": str, "kind": str}, f"resources.{resource_id}")
-        resource_bundle = item.get("bundleId", document["bundleId"])
-        resource_target = item.get("targetId", document["targetId"])
+        _require_fields(item, {"path": str, "size": int, "sha256": str, "kind": str, "bundleId": str, "targetId": str}, f"resources.{resource_id}")
+        resource_bundle = item["bundleId"]
+        resource_target = item["targetId"]
         if resource_bundle != document["bundleId"] or resource_target != document["targetId"]:
             raise ValueError(f"resource {resource_id} references another bundle or target")
         if resource_id in _REQUIRED_RESOURCES and item["kind"] != resource_id:
