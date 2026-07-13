@@ -167,7 +167,7 @@ def validate_release_build(items: tuple[BuildIdentity, BuildIdentity, BuildIdent
         raise ValueError("release resources do not come from one controlled build")
 ```
 
-使用 pyelftools 读取 `.release_identity`；CLI 只接收 `--build-dir`、项目、两个密钥引用和输出，输入文件名来自项目配置。
+使用内置 ELF32 little-endian 解析器读取 `.fw_identity`；CLI 只接收 `--build-dir`、项目、两个密钥引用和输出，输入文件名来自项目配置。
 
 - [ ] **Step 4: 验证打包器不接受任意资源路径且混搭必失败**
 

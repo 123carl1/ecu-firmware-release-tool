@@ -1,10 +1,13 @@
 import struct
+import subprocess
+from pathlib import Path
 
 import pytest
 
 from unified_can_lin_host_tool.release.build_identity import (
     BuildIdentity,
     decode_build_identity,
+    read_build_identity,
     validate_release_build,
 )
 from unified_can_lin_host_tool.release.package import ResourceKind
@@ -54,3 +57,46 @@ def test_release_build_rejects_mixed_build_ids() -> None:
 
     with pytest.raises(ValueError, match="one controlled build"):
         validate_release_build(identities)
+
+
+def test_reads_allocated_identity_section_and_matches_bin(tmp_path: Path) -> None:
+    identity = _raw(ResourceKind.APP)
+    source = tmp_path / "identity.S"
+    linker = tmp_path / "identity.ld"
+    elf = tmp_path / "identity.elf"
+    binary = tmp_path / "identity.bin"
+    source.write_text(
+        '.section .fw_identity,"a",%progbits\n.global fw_identity\n'
+        'fw_identity:\n.incbin "identity.raw"\n'
+        '.section .text,"ax"\n.global _start\n_start:\n nop\n',
+        encoding="ascii",
+    )
+    (tmp_path / "identity.raw").write_bytes(identity)
+    linker.write_text(
+        "SECTIONS { . = 0x1000; .fw_identity : { *(.fw_identity) } "
+        ".text : { *(.text) } }\n",
+        encoding="ascii",
+    )
+    subprocess.run(
+        ["arm-none-eabi-gcc", "-nostdlib", "-Wl,-T," + str(linker), str(source), "-o", str(elf)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["arm-none-eabi-objcopy", "-O", "binary", str(elf), str(binary)],
+        check=True,
+        capture_output=True,
+    )
+
+    assert read_build_identity(elf, binary) == decode_build_identity(identity)
+
+
+def test_rejects_bin_that_differs_from_elf_identity(tmp_path: Path) -> None:
+    elf = tmp_path / "missing.elf"
+    binary = tmp_path / "image.bin"
+    elf.write_bytes(b"not-elf")
+    binary.write_bytes(_raw(ResourceKind.BOOT))
+
+    with pytest.raises(ValueError, match="ELF"):
+        read_build_identity(elf, binary)

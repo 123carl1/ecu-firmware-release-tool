@@ -157,7 +157,7 @@ resource   = normalizedPayload || authBlock
 
 ### 5.6 构建链
 
-开发用命令行提供 `ecu-release build-package`，由固件仓库发布脚本调用。发布脚本在一次构建开始时生成32字节随机 `buildId`，并生成只供本次构建使用的 `ReleaseBuildIdentity_Generated.h`。Boot、App、FlashDriver 都通过各自链接脚本的 `KEEP(*(.release_identity))` 放置恰好100字节 `BuildIdentityV1`：Boot/App 位于中断向量表之后、普通代码之前，FlashDriver 位于驱动入口表之后、普通代码之前；链接脚本导出 `__release_identity_start__` 和 `__release_identity_end__`，并用链接断言保证长度为100字节且位于对应镜像装载范围内。
+开发用命令行提供 `ecu-release build-package`，由固件仓库发布脚本调用。发布脚本在一次构建开始时生成32字节随机 `buildId`，并生成只供本次构建使用的 `ReleaseBuildIdentity_Generated.h`。Boot、App、FlashDriver 都通过各自链接脚本的 `KEEP(*(.fw_identity))` 放置恰好100字节 `BuildIdentityV1`：Boot/App 位于中断向量表之后、普通代码之前，FlashDriver 位于驱动入口表之后、普通代码之前；链接脚本导出 `__fw_identity_start__` 和 `__fw_identity_end__`，并用链接断言保证长度为100字节且位于对应镜像装载范围内。禁止使用以 `.rel` 开头的节名，因为 GNU assembler 会将其识别为 relocation section。
 
 ```text
 magic:bytes4 = "RBID"
@@ -175,7 +175,7 @@ buildCommit:bytes20
 
 `build-package` 不接受三个任意文件路径，只接受受控构建输出目录、项目、HMAC 密钥引用、Ed25519 私钥引用和输出路径；三个输入文件名由项目发布配置固定。它完成：
 
-1. 从固定输出目录读取三个 ELF 和三个 BIN，按 ELF 的 `.release_identity` 节及导出符号定位身份块，验证该节具有装载属性、BIN 对应装载地址的100字节完全相同，并验证同一次构建、正确资源角色和内部项目配置摘要；缺 ELF、节重复、magic 在其它位置重复或 BIN/ELF 不一致均拒绝。
+1. 从固定输出目录读取三个 ELF 和三个 BIN，按 ELF 的 `.fw_identity` 节及导出符号定位身份块，验证该节具有装载属性、BIN 对应装载地址的100字节完全相同，并验证同一次构建、正确资源角色和内部项目配置摘要；缺 ELF、节重复、magic 在其它位置重复或 BIN/ELF 不一致均拒绝。
 2. 对 App 与 FlashDriver 生成 HMAC 认证块，再重新验证 HMAC、地址、长度、各自 targetId 和版本；Boot 不含 HMAC 认证块，表项 `authVersion=0`。
 3. 在输出同目录生成唯一临时文件。
 4. 写入文件头、资源表、资源和签名尾。

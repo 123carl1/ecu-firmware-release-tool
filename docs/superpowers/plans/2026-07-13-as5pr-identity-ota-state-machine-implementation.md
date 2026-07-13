@@ -28,7 +28,7 @@
 - Modify: `../DAU_FM33_HT_AS5PR/tools/build_ota_release.ps1`
 
 **Interfaces:**
-- Produces: `ReleaseIdentity_GetDidData(role, out[8])`，ELF `.release_identity` 恰好100字节。
+- Produces: `ReleaseIdentity_GetDidData(role, out[8])`，ELF `.fw_identity` 恰好100字节。
 
 - [ ] **Step 1: 写 host test，断言三种 role 的 RBID 布局和 F1A0 字节**
 - [ ] **Step 2: 运行 host test 确认失败**
