@@ -22,8 +22,8 @@ def test_inspection_builds_recomputable_artifact_identity(tmp_path: Path) -> Non
 
 def test_non_data_record_change_does_not_change_payload_identity_hash(tmp_path: Path) -> None:
     first = tmp_path / "first.s19"; second = tmp_path / "second.s19"
-    first.write_text("S0030000FC\nS104100041AA\nS9030000FC", encoding="ascii")
-    second.write_text("S004000058A3\nS104100041AA\nS9031234B6", encoding="ascii")
+    first.write_text("S0030000FC\nS104100041AA\nS9031000EC", encoding="ascii")
+    second.write_text("S004000058A3\nS104100041AA\nS9031000EC", encoding="ascii")
     a = inspect_artifact(first, _context()); b = inspect_artifact(second, _context())
     assert a.segments == b.segments
     assert a.identity.normalized_payload_sha256 == b.identity.normalized_payload_sha256

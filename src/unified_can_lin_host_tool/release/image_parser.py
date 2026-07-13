@@ -80,6 +80,12 @@ def _parse_hex(source: bytes) -> tuple[Segment, ...]:
 def _parse_srec(source: bytes) -> tuple[Segment, ...]:
     sizes = {"0": 2, "1": 2, "2": 3, "3": 4, "5": 2, "6": 3, "7": 4, "8": 3, "9": 2}
     segments: list[Segment] = []
+    data_kind: str | None = None
+    data_count = 0
+    declared_count: int | None = None
+    terminated = False
+    entry_address: int | None = None
+    termination_kind: str | None = None
     for line_no, text in enumerate(_decode_text(source, "S-record"), 1):
         if len(text) < 4 or text[:1] != "S" or text[1:2] not in sizes:
             raise _error(f"unsupported S-record type at line {line_no}")
@@ -94,8 +100,40 @@ def _parse_srec(source: bytes) -> tuple[Segment, ...]:
             raise _error(f"S-record count too short at line {line_no}")
         address = int.from_bytes(raw[1:1 + address_size], "big")
         data = raw[1 + address_size:-1]
-        if text[1] in "123" and data: segments.append(Segment(address, data))
-    return _finish(segments)
+        kind = text[1]
+        if terminated:
+            raise _error(f"record after S-record termination at line {line_no}")
+        if kind in "123":
+            if not data:
+                raise _error(f"empty S-record data record at line {line_no}")
+            if data_kind is not None and data_kind != kind:
+                raise _error(f"mixed S-record data address widths at line {line_no}")
+            data_kind = kind
+            data_count += 1
+            segments.append(Segment(address, data))
+        elif kind in "56":
+            if data or declared_count is not None:
+                raise _error(f"invalid S-record count record at line {line_no}")
+            declared_count = address
+        elif kind in "789":
+            if data:
+                raise _error(f"invalid S-record termination at line {line_no}")
+            terminated = True
+            termination_kind = kind
+            entry_address = address & ~1
+    if not terminated:
+        raise _error("S-record missing termination")
+    expected_termination = {"1": "9", "2": "8", "3": "7"}.get(data_kind)
+    if termination_kind != expected_termination:
+        raise _error("S-record termination type does not match data records")
+    if declared_count is not None and declared_count != data_count:
+        raise _error("S-record declared count does not match data records")
+    finished = _finish(segments)
+    if entry_address is None or not any(
+        item.address <= entry_address < item.address + len(item.data) for item in finished
+    ):
+        raise _error("S-record entry address is outside loaded data")
+    return finished
 
 
 def _parse_image_bytes(path: Path, source: bytes, *, bin_start: int | None = None) -> tuple[Segment, ...]:

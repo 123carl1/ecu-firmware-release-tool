@@ -83,14 +83,31 @@ def test_hex_rejects_identical_overlap(tmp_path: Path) -> None:
 
 def test_s19_parses_data_and_ignores_non_data_records(tmp_path: Path) -> None:
     path = tmp_path / "app.s19"
-    path.write_text("\n".join((_srec("0", 0, b"HDR"), _srec("1", 0x1000, b"AB"), _srec("2", 0x200000, b"C"), _srec("5", 2), _srec("9", 0x1000))), encoding="ascii")
-    assert parse_image(path) == (Segment(0x1000, b"AB"), Segment(0x200000, b"C"))
+    path.write_text("\n".join((_srec("0", 0, b"HDR"), _srec("1", 0x1000, b"AB"), _srec("1", 0x2000, b"C"), _srec("5", 2), _srec("9", 0x1000))), encoding="ascii")
+    assert parse_image(path) == (Segment(0x1000, b"AB"), Segment(0x2000, b"C"))
 
 
 def test_s19_rejects_count_checksum_and_overlap(tmp_path: Path) -> None:
-    for name, text, match in (("count", "S10510004100", "count"), ("sum", _srec("1", 0x1000, b"A")[:-2] + "00", "checksum"), ("overlap", "\n".join((_srec("1", 0x1000, b"AB"), _srec("1", 0x1001, b"B"), _srec("9", 0))), "overlap")):
+    for name, text, match in (("count", "S10510004100", "count"), ("sum", _srec("1", 0x1000, b"A")[:-2] + "00", "checksum"), ("overlap", "\n".join((_srec("1", 0x1000, b"AB"), _srec("1", 0x1001, b"B"), _srec("9", 0x1000))), "overlap")):
         path = tmp_path / f"{name}.s19"; path.write_text(text, encoding="ascii")
         with pytest.raises(HostToolError, match=match): parse_image(path)
+
+
+@pytest.mark.parametrize(
+    "lines,match",
+    [
+        (lambda: [_srec("1", 0x1000, b"A")], "termination"),
+        (lambda: [_srec("1", 0x1000, b"A"), _srec("9", 0x1000), _srec("1", 0x1001, b"B")], "after"),
+        (lambda: [_srec("1", 0x1000, b"A"), _srec("5", 2), _srec("9", 0x1000)], "declared count"),
+        (lambda: [_srec("1", 0x1000, b"A"), _srec("8", 0x1000)], "termination type"),
+        (lambda: [_srec("1", 0x1000, b"A"), _srec("9", 0x2000)], "entry address"),
+    ],
+)
+def test_srecord_rejects_invalid_control_records(tmp_path: Path, lines, match: str) -> None:
+    path = tmp_path / "bad.s19"
+    path.write_text("\n".join(lines()), encoding="ascii")
+    with pytest.raises(HostToolError, match=match):
+        parse_image(path)
 
 
 def test_normalize_fills_gaps_and_validates_arguments() -> None:

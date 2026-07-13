@@ -96,6 +96,71 @@ class CanIsoTpTransportTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.category, ErrorCategory.TRANSPORT)
 
+    def test_timestamp_boundary_accepts_only_response_generated_after_transmit(self):
+        class FreshnessAdapter:
+            def __init__(self):
+                self.responses = [CanFrame(0x709, bytes.fromhex("02 50 01 AA AA AA AA AA"))]
+
+            def send_can_frame(self, can_id, data):
+                self.responses.clear()
+                self.responses.append(CanFrame(0x709, bytes.fromhex("02 50 03 AA AA AA AA AA")))
+
+            def receive_can_frame(self, can_id, timeout_ms):
+                return self.responses.pop(0) if self.responses else None
+
+        profile = load_profile("profiles/as5pr_can_bootloader.yaml")
+        adapter = FreshnessAdapter()
+        transport = CanIsoTpTransport(adapter, profile, sleep_func=lambda _: None)
+
+        response = transport.request(bytes.fromhex("10 03"), expect_prefix=bytes.fromhex("50 03"))
+
+        self.assertEqual(response.payload, bytes.fromhex("50 03"))
+
+    def test_trace_failure_never_controls_protocol(self):
+        class BrokenTrace:
+            def write(self, _event):
+                raise OSError("disk full")
+
+        profile = load_profile("profiles/as5pr_can_bootloader.yaml")
+        adapter = FakeCanAdapter(responses=[(0x709, bytes.fromhex("02 50 01 AA AA AA AA AA"))])
+        transport = CanIsoTpTransport(adapter, profile, sleep_func=lambda _: None, trace_logger=BrokenTrace())
+
+        response = transport.request(bytes.fromhex("10 01"), expect_prefix=bytes.fromhex("50 01"))
+
+        self.assertEqual(response.payload, bytes.fromhex("50 01"))
+
+    def test_initial_flow_control_timeout_retries_only_first_frame(self):
+        class RetryAdapter:
+            def __init__(self):
+                self.sent = []
+                self.responses = []
+                self.first_frames = 0
+
+            def send_can_frame(self, can_id, data):
+                self.sent.append(data)
+                if data[0] & 0xF0 == 0x10:
+                    self.first_frames += 1
+                    if self.first_frames == 2:
+                        self.responses.append(CanFrame(0x709, bytes.fromhex("30 00 00 AA AA AA AA AA")))
+                elif data[0] & 0xF0 == 0x20:
+                    self.responses.append(CanFrame(0x709, bytes.fromhex("02 76 01 AA AA AA AA AA")))
+
+            def receive_can_frame(self, can_id, timeout_ms):
+                return self.responses.pop(0) if self.responses else None
+
+        profile = load_profile("profiles/as5pr_can_bootloader.yaml")
+        adapter = RetryAdapter()
+        transport = CanIsoTpTransport(adapter, profile, sleep_func=lambda _: None)
+
+        response = transport.request(
+            bytes.fromhex("36 01 01 02 03 04 05 06 07 08"),
+            expect_prefix=bytes.fromhex("76 01"),
+        )
+
+        self.assertEqual(response.payload, bytes.fromhex("76 01"))
+        self.assertEqual(adapter.first_frames, 2)
+        self.assertEqual(sum(1 for item in adapter.sent if item[0] & 0xF0 == 0x20), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

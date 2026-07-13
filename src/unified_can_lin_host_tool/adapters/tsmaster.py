@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import winreg
 from ctypes import (
     POINTER,
     Structure,
@@ -12,6 +14,7 @@ from ctypes import (
     c_float,
     c_int32,
     c_int64,
+    c_uint32,
     c_uint8,
 )
 from dataclasses import dataclass
@@ -21,14 +24,41 @@ from time import monotonic, sleep
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.transport.base import CanFrame, LinFrame
 
+
+def _registered_tsmaster_candidates() -> tuple[Path, ...]:
+    candidates: list[Path] = []
+    subkey = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                uninstall = winreg.OpenKey(root, subkey, 0, winreg.KEY_READ | view)
+            except OSError:
+                continue
+            with uninstall:
+                for index in range(winreg.QueryInfoKey(uninstall)[0]):
+                    try:
+                        name = winreg.EnumKey(uninstall, index)
+                        with winreg.OpenKey(uninstall, name) as item:
+                            display, _ = winreg.QueryValueEx(item, "DisplayName")
+                            install, _ = winreg.QueryValueEx(item, "InstallLocation")
+                    except OSError:
+                        continue
+                    if "TSMASTER" not in str(display).upper() or not str(install).strip():
+                        continue
+                    base = Path(str(install).strip())
+                    candidates.extend((base / "bin64" / "TSMaster.dll", base / "bin" / "TSMaster.dll"))
+    return tuple(candidates)
+
 def _default_tsmaster_dll() -> str:
     configured = os.environ.get("TSMASTER_DLL")
     if configured:
         return configured
+    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
     candidates = (
-        Path(r"D:\software\TSMaster\bin64\TSMaster.dll"),
-        Path(r"C:\Program Files\TOSUN\TSMaster\bin64\TSMaster.dll"),
-        Path(r"C:\Program Files\TSMaster\bin64\TSMaster.dll"),
+        Path(sys.executable).resolve().with_name("TSMaster.dll"),
+        program_files / "TOSUN" / "TSMaster" / "bin64" / "TSMaster.dll",
+        program_files / "TSMaster" / "bin64" / "TSMaster.dll",
+        *_registered_tsmaster_candidates(),
     )
     return str(next((item for item in candidates if item.is_file()), Path("TSMaster.dll")))
 
@@ -91,6 +121,20 @@ class TsmasterDevice:
     device_index: int
 
 
+@dataclass(frozen=True)
+class TsmasterCanDevice:
+    """同星 SDK 直接返回的 CAN 硬件能力。"""
+
+    device_index: int
+    manufacturer: str
+    product: str
+    serial: str
+    hw_subtype: int
+    device_name: str
+    can_channel_count: int
+    is_can_fd: bool
+
+
 class TsmasterAdapter:
     def __init__(
         self,
@@ -100,6 +144,7 @@ class TsmasterAdapter:
         project_dir: str | Path | None = None,
         app_channel: int = 0,
         hw_name: str = "TC1016",
+        hw_device_type: int = TS_USB_DEVICE,
         hw_subtype: int = 11,
         hw_index: int = 0,
         hw_channel: int = 0,
@@ -112,6 +157,7 @@ class TsmasterAdapter:
         self.project_dir = Path(project_dir) if project_dir is not None else None
         self.app_channel = app_channel
         self.hw_name = hw_name
+        self.hw_device_type = hw_device_type
         self.hw_subtype = hw_subtype
         self.hw_index = hw_index
         self.hw_channel = hw_channel
@@ -162,6 +208,92 @@ class TsmasterAdapter:
         finally:
             adapter._finalize()
 
+    @classmethod
+    def probe_can_devices(
+        cls,
+        *,
+        dll_path: str = DEFAULT_TSMASTER_DLL,
+        app_name: str = "Codex_UnifiedHostTool_Probe",
+    ) -> list[TsmasterCanDevice]:
+        """通过 libTSCAN 设备详情接口读取真实 CAN 硬件能力。"""
+        del app_name  # libTSCAN 设备枚举不使用 TSMaster 应用名。
+        sdk_path = Path(dll_path).resolve().with_name("libTSCAN.dll")
+        try:
+            dll = WinDLL(str(sdk_path))
+        except OSError as exc:
+            raise HostToolError(
+                ErrorCategory.DEVICE,
+                f"load TOSUN SDK failed: {sdk_path}",
+            ) from exc
+
+        try:
+            initialize = dll.initialize_lib_tscan
+            scan = dll.tscan_scan_devices
+            get_detail = dll.tscan_get_device_info_detail
+            finalize = dll.finalize_lib_tscan
+        except AttributeError as exc:
+            raise HostToolError(
+                ErrorCategory.DEVICE,
+                "当前同星 SDK 不支持设备能力枚举，请升级 TSMaster/libTSCAN",
+            ) from exc
+        initialize.restype = None
+        initialize.argtypes = [c_bool, c_bool, c_bool]
+        scan.restype = c_int32
+        scan.argtypes = [POINTER(c_uint32)]
+        get_detail.restype = c_int32
+        get_detail.argtypes = [
+            c_uint32,
+            POINTER(c_char_p), POINTER(c_char_p), POINTER(c_char_p),
+            POINTER(c_int32), POINTER(c_char_p), POINTER(c_int32),
+            POINTER(c_bool), POINTER(c_int32), POINTER(c_int32),
+            POINTER(c_int32),
+        ]
+        finalize.restype = None
+        finalize.argtypes = []
+
+        initialize(True, False, True)
+        try:
+            count = c_uint32(0)
+            _must_tscan("tscan_scan_devices", scan(byref(count)))
+            devices: list[TsmasterCanDevice] = []
+            for index in range(count.value):
+                manufacturer = c_char_p()
+                product = c_char_p()
+                serial = c_char_p()
+                hw_subtype = c_int32(0)
+                device_name = c_char_p()
+                can_count = c_int32(0)
+                is_can_fd = c_bool(False)
+                lin_count = c_int32(0)
+                flexray_count = c_int32(0)
+                ethernet_count = c_int32(0)
+                _must_tscan(
+                    f"tscan_get_device_info_detail({index})",
+                    get_detail(
+                        index,
+                        byref(manufacturer), byref(product), byref(serial),
+                        byref(hw_subtype), byref(device_name),
+                        byref(can_count), byref(is_can_fd),
+                        byref(lin_count), byref(flexray_count),
+                        byref(ethernet_count),
+                    ),
+                )
+                if can_count.value <= 0:
+                    continue
+                devices.append(TsmasterCanDevice(
+                    device_index=index,
+                    manufacturer=_clean_char_pointer(manufacturer),
+                    product=_clean_char_pointer(product),
+                    serial=_clean_char_pointer(serial),
+                    hw_subtype=hw_subtype.value,
+                    device_name=_clean_char_pointer(device_name),
+                    can_channel_count=can_count.value,
+                    is_can_fd=is_can_fd.value,
+                ))
+            return devices
+        finally:
+            finalize()
+
     def open_lin(self) -> None:
         app_name = self.app_name.encode("utf-8")
         self._initialize()
@@ -175,7 +307,7 @@ class TsmasterAdapter:
                     APP_LIN,
                     self.app_channel,
                     self.hw_name.encode("utf-8"),
-                    TS_USB_DEVICE,
+                    self.hw_device_type,
                     self.hw_subtype,
                     self.hw_index,
                     self.hw_channel,
@@ -228,7 +360,7 @@ class TsmasterAdapter:
                         APP_CAN,
                         current_app_channel,
                         self.hw_name.encode("utf-8"),
-                        TS_USB_DEVICE,
+                        self.hw_device_type,
                         self.hw_subtype,
                         self.hw_index,
                         current_hw_channel,
@@ -241,6 +373,7 @@ class TsmasterAdapter:
                 )
             self._must("tsapp_connect", self._tsapp_connect())
             self._tsfifo_enable_receive_fifo()
+            self.clear_can_receive_buffer()
             self._opened = True
             self._opened_bus = "CAN"
         except Exception:
@@ -331,6 +464,12 @@ class TsmasterAdapter:
 
         return None
 
+    def clear_can_receive_buffer(self) -> None:
+        self._must(
+            "tsfifo_clear_can_receive_buffers",
+            self._tsfifo_clear_can_receive_buffers(self.app_channel),
+        )
+
     def _bind(self) -> None:
         self._initialize_lib_tsmaster = self._dll.initialize_lib_tsmaster
         self._initialize_lib_tsmaster.restype = c_int32
@@ -409,6 +548,10 @@ class TsmasterAdapter:
         self._tsfifo_clear_lin_receive_buffers = self._dll.tsfifo_clear_lin_receive_buffers
         self._tsfifo_clear_lin_receive_buffers.restype = c_int32
         self._tsfifo_clear_lin_receive_buffers.argtypes = [c_int32]
+
+        self._tsfifo_clear_can_receive_buffers = self._dll.tsfifo_clear_can_receive_buffers
+        self._tsfifo_clear_can_receive_buffers.restype = c_int32
+        self._tsfifo_clear_can_receive_buffers.argtypes = [c_int32]
 
         self._tslin_set_node_functiontype = self._dll.tslin_set_node_functiontype
         self._tslin_set_node_functiontype.restype = c_int32
@@ -513,3 +656,12 @@ class TsmasterAdapter:
 
 def _clean_char_array(value) -> str:
     return bytes(value).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
+
+
+def _clean_char_pointer(value: c_char_p) -> str:
+    return (value.value or b"").decode("utf-8", errors="replace")
+
+
+def _must_tscan(operation: str, code: int) -> None:
+    if code != 0:
+        raise HostToolError(ErrorCategory.DEVICE, f"{operation} failed: {code}")

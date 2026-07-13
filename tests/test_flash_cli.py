@@ -32,9 +32,9 @@ class FlashCliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn("FLASH SUCCESS", output.getvalue())
-            logs = list(Path(tmp).glob("trace_*.log"))
+            logs = list(Path(tmp).glob("*.asc"))
             self.assertEqual(len(logs), 1)
-            self.assertIn("0x3C", logs[0].read_text(encoding="utf-8"))
+            self.assertIn(" 3C Tx d 8 ", logs[0].read_text(encoding="utf-8"))
 
     def test_fake_dry_run_accepts_s19_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,14 +89,14 @@ class FlashCliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn("start_in_bootloader=True", output.getvalue())
-            log_text = next(Path(tmp).glob("trace_*.log")).read_text(encoding="utf-8")
-            self.assertIn("data=11 02 10 01", log_text)
-            self.assertIn("data=11 02 10 03", log_text)
-            self.assertIn("data=11 02 27 01", log_text)
-            self.assertIn("data=11 04 31 01 02 03", log_text)
-            self.assertIn("data=11 02 10 02", log_text)
-            self.assertIn("data=11 02 27 09", log_text)
-            self.assertIn("data=11 06 27 0A", log_text)
+            log_text = next(Path(tmp).glob("*.asc")).read_text(encoding="utf-8")
+            self.assertIn(" 3C Tx d 8 11 02 10 01", log_text)
+            self.assertIn(" 3C Tx d 8 11 02 10 03", log_text)
+            self.assertIn(" 3C Tx d 8 11 02 27 01", log_text)
+            self.assertIn(" 3C Tx d 8 11 04 31 01 02 03", log_text)
+            self.assertIn(" 3C Tx d 8 11 02 10 02", log_text)
+            self.assertIn(" 3C Tx d 8 11 02 27 09", log_text)
+            self.assertIn(" 3C Tx d 8 11 06 27 0A", log_text)
 
     def test_tsmaster_dry_run_accepts_mapping_arguments(self):
         output = StringIO()
@@ -163,11 +163,11 @@ class FlashCliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn("FLASH SUCCESS", output.getvalue())
-            logs = list(Path(tmp).glob("trace_*.log"))
+            logs = list(Path(tmp).glob("*.asc"))
             self.assertEqual(len(logs), 1)
             trace_text = logs[0].read_text(encoding="utf-8")
-            self.assertIn("CAN id=0x701", trace_text)
-            self.assertIn("CAN id=0x709", trace_text)
+            self.assertIn(" 701 Tx d 8 ", trace_text)
+            self.assertIn(" 709 Rx d 8 ", trace_text)
 
     def test_tsmaster_can_dry_run_accepts_mapping_arguments(self):
         output = StringIO()

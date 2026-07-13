@@ -59,11 +59,11 @@ class FakeHostBackendTest(unittest.TestCase):
             self.assertEqual([event.trace.direction for event in trace_events], ["TX", "RX"])
             self.assertEqual([event.trace.frame_id for event in trace_events], [0x3C, 0x3D])
 
-            log_files = list(Path(tmp).glob("trace_*.log"))
+            log_files = list(Path(tmp).glob("*.asc"))
             self.assertEqual(len(log_files), 1)
             text = log_files[0].read_text(encoding="utf-8")
-            self.assertIn("TX LIN id=0x3C", text)
-            self.assertIn("RX LIN id=0x3D", text)
+            self.assertIn(" 3C Tx d 8 ", text)
+            self.assertIn(" 3D Rx d 8 ", text)
 
     def test_fake_backend_cancelled_uds_takes_priority_over_unsupported_payload(self):
         backend = FakeHostBackend()

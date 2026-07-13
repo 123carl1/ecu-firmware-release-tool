@@ -19,6 +19,7 @@ CAN_ISOTP_MAX_PAYLOAD_LEN = 0xFFF
 CAN_ISOTP_DEFAULT_FC_BLOCK_SIZE = 0
 CAN_ISOTP_DEFAULT_STMIN = 0
 CAN_ISOTP_MAX_WAIT_FRAMES = 2
+CAN_ISOTP_INITIAL_FC_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -85,9 +86,20 @@ class CanIsoTpTransport:
 
         first_frame = bytes([0x10 | ((len(uds_payload) >> 8) & 0x0F), len(uds_payload) & 0xFF])
         first_frame += uds_payload[:CAN_ISOTP_FF_PAYLOAD_LEN]
-        self._send_request_frame(first_frame, cancel_token=cancel_token)
-
-        block_size, stmin_seconds = self._receive_flow_control(cancel_token=cancel_token)
+        for attempt in range(CAN_ISOTP_INITIAL_FC_ATTEMPTS):
+            if attempt:
+                clear_receive = getattr(self._adapter, "clear_can_receive_buffer", None)
+                if clear_receive is not None:
+                    clear_receive()
+            self._send_request_frame(first_frame, cancel_token=cancel_token)
+            try:
+                block_size, stmin_seconds = self._receive_flow_control(cancel_token=cancel_token)
+                break
+            except HostToolError as exc:
+                if (attempt + 1 >= CAN_ISOTP_INITIAL_FC_ATTEMPTS
+                        or exc.category is not ErrorCategory.TRANSPORT
+                        or exc.message != "CAN ISO-TP flow control timeout"):
+                    raise
         sequence_number = 1
         sent_in_block = 0
         for offset in range(CAN_ISOTP_FF_PAYLOAD_LEN, len(uds_payload), CAN_ISOTP_CF_PAYLOAD_LEN):
@@ -248,7 +260,11 @@ class CanIsoTpTransport:
 
     def _write_trace(self, direction: str, frame_id: int, data: bytes) -> None:
         if self._trace is not None:
-            self._trace.write(TraceEvent(direction=direction, frame_id=frame_id, data=data, bus="CAN"))
+            try:
+                self._trace.write(TraceEvent(direction=direction, frame_id=frame_id, data=data, bus="CAN"))
+            except Exception:
+                # 总线日志是观测通道，磁盘或格式化故障不得中断已开始的编程事务。
+                self._trace = None
 
 
 def _pad(data: bytes, padding: int) -> bytes:

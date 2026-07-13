@@ -102,6 +102,71 @@ def test_app_entry_probes_before_and_after_handoff_and_completes():
     assert transport.requests[7] == bytes.fromhex("22 F1 A0")
 
 
+def test_legacy_package_without_boot_resource_is_rejected_before_bus_access():
+    release_package = package()
+    runtime_resources = tuple(
+        item for item in release_package.resources
+        if item.kind in (ResourceKind.APP, ResourceKind.FLASH_DRIVER)
+    )
+    transport = ScriptedTransport(1)
+
+    result = As5prOtaStateMachine(transport).run(
+        replace(release_package, resources=runtime_resources)
+    )
+
+    assert result.status is OtaResultStatus.PACKAGE_REJECTED
+    assert transport.requests == []
+
+
+def test_malformed_request_download_response_is_rejected_before_transfer_data():
+    transport = ScriptedTransport(2)
+    original = transport.request
+
+    def malformed(payload, **kwargs):
+        if payload.startswith(bytes.fromhex("34")):
+            return Response(bytes.fromhex("74 10 40 00"))
+        return original(payload, **kwargs)
+
+    transport.request = malformed
+    result = As5prOtaStateMachine(transport).run(package())
+    assert result.status is OtaResultStatus.CANCELLED_SAFE
+    assert not any(item.startswith(bytes.fromhex("36")) for item in transport.requests)
+
+
+def test_ota_reports_stage_and_transfer_progress():
+    release_package = package()
+    transport = ScriptedTransport(1)
+    events = []
+
+    result = As5prOtaStateMachine(transport, progress=events.append, sleep_func=lambda _: None).run(release_package)
+
+    assert result.status is OtaResultStatus.COMPLETED
+    assert events[0].percent == 5
+    assert events[-1].percent == 100
+    assert any(event.stage == "下载 App" and event.total for event in events)
+    assert any(event.stage == "复位 ECU" and event.percent == 96 for event in events)
+    assert all(0 <= event.percent <= 100 for event in events)
+
+
+def test_progress_sink_failure_after_erase_does_not_interrupt_programming():
+    transport = ScriptedTransport(1)
+
+    def broken_progress(event):
+        if event.stage == "下载 App":
+            raise BrokenPipeError("GUI pipe closed")
+
+    result = As5prOtaStateMachine(
+        transport,
+        progress=broken_progress,
+        sleep_func=lambda _: None,
+    ).run(package())
+
+    assert result.status is OtaResultStatus.COMPLETED
+    assert any(item.startswith(bytes.fromhex("37")) for item in transport.requests)
+    assert bytes.fromhex("31 01 FF 01") in transport.requests
+    assert bytes.fromhex("11 01") in transport.requests
+
+
 def test_boot_entry_skips_app_preprogramming_and_has_no_manual_flag():
     transport = ScriptedTransport(2)
     result = As5prOtaStateMachine(transport).run(package())
@@ -142,6 +207,21 @@ def test_cancel_after_erase_does_not_send_transfer_exit():
     assert result.status is OtaResultStatus.ECU_IN_BOOT
     erase_index = next(i for i, item in enumerate(transport.requests) if item.startswith(bytes.fromhex("31 01 FF 00")))
     assert not any(item.startswith(bytes.fromhex("37")) for item in transport.requests[erase_index + 1:])
+
+
+def test_erase_response_timeout_is_destructive_unknown_not_safe_cancel():
+    transport = ScriptedTransport(2)
+    original = transport.request
+
+    def timeout(payload, **kwargs):
+        if payload.startswith(bytes.fromhex("31 01 FF 00")):
+            transport.requests.append(payload)
+            raise TimeoutError("erase response timeout")
+        return original(payload, **kwargs)
+
+    transport.request = timeout
+    result = As5prOtaStateMachine(transport).run(package())
+    assert result.status is OtaResultStatus.FAILED_UNKNOWN
 
 
 def test_reset_verification_polls_while_boot_is_still_online_then_confirms_app():
