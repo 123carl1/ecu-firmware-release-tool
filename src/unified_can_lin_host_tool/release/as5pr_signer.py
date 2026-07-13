@@ -10,8 +10,8 @@ import tempfile
 
 from .artifact_identity import compute_artifact_id, compute_signed_artifact_id
 from .image_parser import normalize_segments
-from .inspector import InspectedArtifact
-from .manifest import ReleaseManifest
+from .inspector import InspectedArtifact, revalidate_source
+from .manifest import VerifiedReleaseManifest
 
 
 _POLICY_FACTORY_TOKEN = object()
@@ -44,15 +44,12 @@ class As5prSignPolicy:
             object.__setattr__(self, name, value)
 
     @classmethod
-    def from_verified_manifest(cls, manifest: ReleaseManifest,
-                               manifest_bundle_sha256: bytes) -> "As5prSignPolicy":
-        if not isinstance(manifest, ReleaseManifest):
-            raise TypeError("manifest must be a verified ReleaseManifest")
+    def from_verified_manifest(cls, manifest: VerifiedReleaseManifest) -> "As5prSignPolicy":
+        if not isinstance(manifest, VerifiedReleaseManifest):
+            raise TypeError("manifest must be a VerifiedReleaseManifest")
         actual_manifest_hash = hashlib.sha256(manifest.manifest_bytes).digest()
         if manifest.manifest_sha256.lower() != actual_manifest_hash.hex():
             raise ValueError("verified manifest content hash is inconsistent")
-        if not isinstance(manifest_bundle_sha256, bytes) or len(manifest_bundle_sha256) != 32:
-            raise ValueError("manifest bundle hash must be exactly 32 bytes")
         try:
             target_id = _AS5PR_TARGET_IDS[manifest.target_id]
             version = manifest.authentication["formatVersion"]
@@ -65,7 +62,7 @@ class As5prSignPolicy:
         if magic != 0xA5A5A5A5:
             raise ValueError("manifest AS5PR magic is unsupported")
         return cls(_token=_POLICY_FACTORY_TOKEN, target_id=target_id, version=version,
-                   manifest_bundle_sha256=manifest_bundle_sha256,
+                   manifest_bundle_sha256=actual_manifest_hash,
                    sign_policy_id=sign_policy_id, magic=magic, bundle_id=manifest.bundle_id,
                    manifest_sha256=actual_manifest_hash)
 
@@ -125,10 +122,7 @@ def _validate_artifact(artifact: InspectedArtifact) -> None:
         raise ValueError("artifact identity is inconsistent")
 
 
-def sign_as5pr(artifact: InspectedArtifact, policy: As5prSignPolicy, key: bytes) -> SignedArtifact:
-    _key(key)
-    _validate_policy(artifact, policy)
-    _validate_artifact(artifact)
+def _build_signed(artifact: InspectedArtifact, policy: As5prSignPolicy, key: bytes) -> SignedArtifact:
     payload = artifact.normalized_payload
     header = struct.pack("<IIII", policy.magic, len(payload), policy.target_id, policy.version)
     auth_block = header + hmac.new(key, payload + header, hashlib.sha256).digest()
@@ -141,10 +135,20 @@ def sign_as5pr(artifact: InspectedArtifact, policy: As5prSignPolicy, key: bytes)
                           policy.manifest_bundle_sha256, signed_id)
 
 
+
+def sign_as5pr(artifact: InspectedArtifact, policy: As5prSignPolicy, key: bytes) -> SignedArtifact:
+    _key(key)
+    _validate_policy(artifact, policy)
+    _validate_artifact(artifact)
+    revalidate_source(artifact)
+    return _build_signed(artifact, policy, key)
+
+
 def verify_as5pr(signed: SignedArtifact, policy: As5prSignPolicy, key: bytes) -> None:
     _key(key)
     _validate_policy(signed.artifact, policy)
-    expected = sign_as5pr(signed.artifact, policy, key)
+    _validate_artifact(signed.artifact)
+    expected = _build_signed(signed.artifact, policy, key)
     if len(signed.auth_block) != 48:
         raise ValueError("AS5PR authentication block must be 48 bytes")
     checks = (
@@ -163,6 +167,7 @@ def write_signed_as5pr(path: Path, signed: SignedArtifact, policy: As5prSignPoli
                        key: bytes) -> None:
     """在目标同目录写临时文件，复读并认证成功后原子替换。"""
     verify_as5pr(signed, policy, key)
+    revalidate_source(signed.artifact)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None

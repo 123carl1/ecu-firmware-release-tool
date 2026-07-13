@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from unified_can_lin_host_tool.core.errors import HostToolError
 from unified_can_lin_host_tool.release.manifest import (
+    VerifiedReleaseManifest,
     load_verified_manifest,
     resolve_bundle_resource,
 )
@@ -55,9 +56,15 @@ def _bundle(tmp_path: Path, mutate: callable | None = None):
     return root, document, public, public_raw
 
 
+def test_verified_manifest_constructor_is_module_protected() -> None:
+    with pytest.raises(TypeError):
+        VerifiedReleaseManifest(object())  # type: ignore[call-arg]
+
+
 def test_valid_signature_schema_and_resources_are_immutable_and_readable(tmp_path):
     root, _, public, public_raw = _bundle(tmp_path)
     manifest = load_verified_manifest(root, public_raw)
+    assert isinstance(manifest, VerifiedReleaseManifest)
     assert manifest.bundle_id == "bundle-001"
     assert manifest.target_id == "fm33ht-as5pr"
     assert manifest.profile == manifest.resources["profile"]

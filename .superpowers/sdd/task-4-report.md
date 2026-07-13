@@ -41,3 +41,13 @@
 - 修复：签名和复验共用完整 artifact 校验，重新规范化 segments，并交叉核对 source hash、segments、payload、payload hash、identity 和 ArtifactId。
 - GREEN：signer 专项 `26 passed in 0.18s`；release 回归 `114 passed in 1.02s`；`git diff --check` 通过。
 - 修复提交：待本次本地提交后，以交付消息中的最终 hash 为准。
+
+
+## 第二轮信任根与 TOCTOU 修复
+
+- RED：manifest+signer 专项因缺少 `VerifiedReleaseManifest` 在收集阶段失败；新增普通 manifest、外部任意 hash、源变化/删除及快照离线复验测试。
+- Manifest：增加模块私有 token 保护的 `VerifiedReleaseManifest`；仅 `load_verified_manifest` 在 Ed25519、schema 和全部资源校验完成后创建并返回。
+- Policy：`from_verified_manifest` 只接受上述已验证类型，删除外部 `manifest_bundle_sha256` 参数，直接对已验签原始 `manifest_bytes` 计算 SHA-256。
+- TOCTOU：`sign_as5pr` 和 `write_signed_as5pr` 在签名/写出前调用 `revalidate_source`；`verify_as5pr` 仍允许源文件不存在时验证不可变快照。
+- GREEN：manifest+signer 专项 `62 passed in 0.63s`；release 回归 `119 passed in 0.68s`；`git diff --check` 通过。
+- 修复提交：待本次本地提交后，以交付消息中的最终 hash 为准。

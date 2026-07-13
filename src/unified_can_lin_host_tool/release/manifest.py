@@ -60,6 +60,24 @@ class ReleaseManifest:
         return self.memory
 
 
+_VERIFIED_MANIFEST_TOKEN = object()
+
+
+@dataclass(frozen=True, init=False)
+class VerifiedReleaseManifest:
+    """只能由完成签名、schema 和资源校验的加载器创建。"""
+
+    _manifest: ReleaseManifest
+
+    def __init__(self, manifest: ReleaseManifest, *, _token: object) -> None:
+        if _token is not _VERIFIED_MANIFEST_TOKEN:
+            raise TypeError("VerifiedReleaseManifest can only be created by the verified loader")
+        object.__setattr__(self, "_manifest", manifest)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._manifest, name)
+
+
 _TOP_FIELDS = {
     "schemaVersion": int, "bundleId": str, "targetId": str, "projectId": str,
     "version": str, "source": dict, "memory": dict, "normalization": dict,
@@ -112,7 +130,7 @@ def _public_key(value: bytes | Ed25519PublicKey) -> Ed25519PublicKey:
     return Ed25519PublicKey.from_public_bytes(value)
 
 
-def load_verified_manifest(bundle_root: Path, public_key: bytes | Ed25519PublicKey) -> ReleaseManifest:
+def load_verified_manifest(bundle_root: Path, public_key: bytes | Ed25519PublicKey) -> VerifiedReleaseManifest:
     root = Path(bundle_root)
     raw = (root / "manifest.yaml").read_bytes()
     signature = (root / "manifest.sig").read_bytes()
@@ -164,15 +182,16 @@ def load_verified_manifest(bundle_root: Path, public_key: bytes | Ed25519PublicK
             raise ValueError(f"resource {resource_id} integrity verification failed")
         descriptors[resource_id] = ResourceDescriptor(resource_id, item["path"], item["size"], item["sha256"].lower(), item["kind"], resource_bundle, resource_target)
 
-    return ReleaseManifest(
+    manifest = ReleaseManifest(
         root.resolve(), raw, hashlib.sha256(raw).hexdigest(), document["schemaVersion"],
         document["bundleId"], document["targetId"], document["projectId"], document["version"],
         _frozen(document["source"]), _frozen(document["memory"]), _frozen(document["normalization"]),
         _frozen(document["authentication"]), _frozen(document["workflow"]), MappingProxyType(descriptors),
     )
+    return VerifiedReleaseManifest(manifest, _token=_VERIFIED_MANIFEST_TOKEN)
 
 
-def resolve_bundle_resource(manifest: ReleaseManifest, resource_id: str) -> Path:
+def resolve_bundle_resource(manifest: ReleaseManifest | VerifiedReleaseManifest, resource_id: str) -> Path:
     try:
         descriptor = manifest.resources[resource_id]
     except KeyError:
