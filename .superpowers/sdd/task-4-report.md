@@ -27,9 +27,17 @@
 
 ## Commit
 
-本地提交：`dd6b448`（提交 amend 后最终 hash 以交付消息为准）。
+初始本地提交：`f51a0df`。
 
 ## Concerns
 
 - 当前接口只提供开发 HMAC 签名核心；跨进程内容寻址存储属于 Task5，不在本任务范围。
 - 未导出到 release 包顶层；调用方可从 `release.as5pr_signer` 显式导入，避免扩大现有公共入口。
+
+## 独立评审阻塞项修复
+
+- RED：新增 manifest 工厂、禁止手工 policy、source/segments/normalized payload/identity segments 伪造测试；首次运行 `26 failed`，明确暴露工厂缺失和内部一致性未校验。
+- 修复：`As5prSignPolicy.from_verified_manifest()` 从 `ReleaseManifest` 派生 targetId、formatVersion、magic、signPolicyId、bundleId 和 manifest 内容 hash，并生成不可伪改的绑定摘要；公开构造拒绝绕过工厂。
+- 修复：签名和复验共用完整 artifact 校验，重新规范化 segments，并交叉核对 source hash、segments、payload、payload hash、identity 和 ArtifactId。
+- GREEN：signer 专项 `26 passed in 0.18s`；release 回归 `114 passed in 1.02s`；`git diff --check` 通过。
+- 修复提交：待本次本地提交后，以交付消息中的最终 hash 为准。

@@ -3,6 +3,7 @@ import hashlib
 import hmac
 from pathlib import Path
 import struct
+from types import MappingProxyType
 
 import pytest
 import unified_can_lin_host_tool.release.as5pr_signer as signer_module
@@ -13,6 +14,7 @@ from unified_can_lin_host_tool.release.as5pr_signer import (
 )
 from unified_can_lin_host_tool.release.inspector import InspectedArtifact
 from unified_can_lin_host_tool.release.models import ArtifactIdentityV1, Segment
+from unified_can_lin_host_tool.release.manifest import ReleaseManifest
 
 
 KEY = bytes(range(32))
@@ -28,11 +30,38 @@ def artifact(target_id: int = 0x41503541, sign_policy_id: str = "hmac-v1") -> In
                              identity, compute_artifact_id(identity))
 
 
-def policy(**changes: object) -> As5prSignPolicy:
-    values = dict(target_id=0x41503541, version=0, manifest_bundle_sha256=MANIFEST_HASH,
-                  sign_policy_id="hmac-v1", magic=0xA5A5A5A5)
+def manifest(**changes: object) -> ReleaseManifest:
+    values = dict(bundle_root=Path("."), manifest_bytes=b"verified manifest",
+        manifest_sha256=hashlib.sha256(b"verified manifest").hexdigest(), schema_version=1,
+        bundle_id="bundle-1", target_id="fm33ht-as5pr", project_id="AS5PR", version="1",
+        source=MappingProxyType({}), memory=MappingProxyType({}), normalization=MappingProxyType({}),
+        authentication=MappingProxyType({"formatVersion": 0, "signPolicyId": "hmac-v1",
+                                         "magic": 0xA5A5A5A5}),
+        workflow=MappingProxyType({}), resources=MappingProxyType({}))
     values.update(changes)
-    return As5prSignPolicy(**values)
+    return ReleaseManifest(**values)
+
+
+def policy(**manifest_changes: object) -> As5prSignPolicy:
+    return As5prSignPolicy.from_verified_manifest(manifest(**manifest_changes), MANIFEST_HASH)
+
+
+def test_policy_cannot_be_constructed_without_verified_manifest() -> None:
+    with pytest.raises(TypeError):
+        As5prSignPolicy(target_id=0x41503541, version=0,  # type: ignore[call-arg]
+                        manifest_bundle_sha256=MANIFEST_HASH,
+                        sign_policy_id="hmac-v1", magic=0xA5A5A5A5)
+
+
+@pytest.mark.parametrize("change", [
+    {"target_id": "other"},
+    {"authentication": MappingProxyType({"formatVersion": 0, "signPolicyId": "other",
+                                           "magic": 0xA5A5A5A5})},
+    {"authentication": MappingProxyType({"formatVersion": 0, "signPolicyId": "hmac-v1",
+                                           "magic": 1})},
+])
+def test_manifest_policy_must_match_as5pr_artifact(change: dict[str, object]) -> None:
+    with pytest.raises(ValueError): sign_as5pr(artifact(), policy(**change), KEY)
 
 
 def test_matches_as5pr_reference_vector() -> None:
@@ -69,6 +98,25 @@ def test_requires_32_byte_key_without_leaking_it(key: bytes) -> None:
 def test_rejects_policy_and_artifact_identity_mismatch() -> None:
     with pytest.raises(ValueError): sign_as5pr(artifact(target_id=1), policy(), KEY)
     with pytest.raises(ValueError): sign_as5pr(artifact(sign_policy_id="other"), policy(), KEY)
+
+
+@pytest.mark.parametrize("field", ["source_file_sha256", "segments", "normalized_payload"])
+def test_rejects_forged_inspected_artifact_fields(field: str) -> None:
+    original = artifact()
+    forged = {
+        "source_file_sha256": b"\x22" * 32,
+        "segments": (Segment(0x7000, b"evil"),),
+        "normalized_payload": b"evil",
+    }[field]
+    with pytest.raises(ValueError): sign_as5pr(replace(original, **{field: forged}), policy(), KEY)
+
+
+def test_rejects_identity_segments_that_do_not_match_payload_segments() -> None:
+    original = artifact()
+    forged_identity = replace(original.identity, segments=(Segment(0x7000, b"evil"),))
+    forged = replace(original, identity=forged_identity,
+                     artifact_id=compute_artifact_id(forged_identity))
+    with pytest.raises(ValueError): sign_as5pr(forged, policy(), KEY)
 
 
 @pytest.mark.parametrize("field", ["signed_file_sha256", "auth_block_sha256",

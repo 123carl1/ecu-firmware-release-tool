@@ -9,16 +9,65 @@ import struct
 import tempfile
 
 from .artifact_identity import compute_artifact_id, compute_signed_artifact_id
+from .image_parser import normalize_segments
 from .inspector import InspectedArtifact
+from .manifest import ReleaseManifest
 
 
-@dataclass(frozen=True)
+_POLICY_FACTORY_TOKEN = object()
+_AS5PR_TARGET_IDS = {"fm33ht-as5pr": 0x41503541}
+
+
+@dataclass(frozen=True, init=False)
 class As5prSignPolicy:
     target_id: int
     version: int
     manifest_bundle_sha256: bytes
     sign_policy_id: str
-    magic: int = 0xA5A5A5A5
+    magic: int
+    bundle_id: str
+    manifest_sha256: bytes
+    _binding_sha256: bytes
+
+    def __init__(self, *, _token: object, target_id: int, version: int,
+                 manifest_bundle_sha256: bytes, sign_policy_id: str, magic: int,
+                 bundle_id: str, manifest_sha256: bytes) -> None:
+        if _token is not _POLICY_FACTORY_TOKEN:
+            raise TypeError("As5prSignPolicy must be created from a verified manifest")
+        values = (struct.pack("<III", magic, target_id, version) + sign_policy_id.encode() + b"\0"
+                  + bundle_id.encode() + b"\0" + manifest_bundle_sha256 + manifest_sha256)
+        for name, value in (("target_id", target_id), ("version", version),
+                            ("manifest_bundle_sha256", manifest_bundle_sha256),
+                            ("sign_policy_id", sign_policy_id), ("magic", magic),
+                            ("bundle_id", bundle_id), ("manifest_sha256", manifest_sha256),
+                            ("_binding_sha256", hashlib.sha256(values).digest())):
+            object.__setattr__(self, name, value)
+
+    @classmethod
+    def from_verified_manifest(cls, manifest: ReleaseManifest,
+                               manifest_bundle_sha256: bytes) -> "As5prSignPolicy":
+        if not isinstance(manifest, ReleaseManifest):
+            raise TypeError("manifest must be a verified ReleaseManifest")
+        actual_manifest_hash = hashlib.sha256(manifest.manifest_bytes).digest()
+        if manifest.manifest_sha256.lower() != actual_manifest_hash.hex():
+            raise ValueError("verified manifest content hash is inconsistent")
+        if not isinstance(manifest_bundle_sha256, bytes) or len(manifest_bundle_sha256) != 32:
+            raise ValueError("manifest bundle hash must be exactly 32 bytes")
+        try:
+            target_id = _AS5PR_TARGET_IDS[manifest.target_id]
+            version = manifest.authentication["formatVersion"]
+            sign_policy_id = manifest.authentication["signPolicyId"]
+            magic = manifest.authentication["magic"]
+        except KeyError as exc:
+            raise ValueError("manifest lacks AS5PR signing policy fields") from exc
+        if type(version) is not int or not isinstance(sign_policy_id, str) or type(magic) is not int:
+            raise ValueError("manifest AS5PR signing policy fields have invalid types")
+        if magic != 0xA5A5A5A5:
+            raise ValueError("manifest AS5PR magic is unsupported")
+        return cls(_token=_POLICY_FACTORY_TOKEN, target_id=target_id, version=version,
+                   manifest_bundle_sha256=manifest_bundle_sha256,
+                   sign_policy_id=sign_policy_id, magic=magic, bundle_id=manifest.bundle_id,
+                   manifest_sha256=actual_manifest_hash)
 
 
 @dataclass(frozen=True)
@@ -38,10 +87,19 @@ def _key(key: bytes) -> None:
 
 
 def _validate_policy(artifact: InspectedArtifact, policy: As5prSignPolicy) -> None:
+    if not isinstance(policy, As5prSignPolicy):
+        raise TypeError("policy must be As5prSignPolicy")
+    bound = (struct.pack("<III", policy.magic, policy.target_id, policy.version)
+             + policy.sign_policy_id.encode() + b"\0" + policy.bundle_id.encode() + b"\0"
+             + policy.manifest_bundle_sha256 + policy.manifest_sha256)
+    if not hmac.compare_digest(policy._binding_sha256, hashlib.sha256(bound).digest()):
+        raise ValueError("signing policy is not bound to its verified manifest")
     if artifact.identity.target_id != policy.target_id:
         raise ValueError("artifact target identity does not match signing policy")
     if artifact.identity.sign_policy_id != policy.sign_policy_id:
         raise ValueError("artifact signing policy identity does not match manifest policy")
+    if artifact.identity.bundle_id != policy.bundle_id:
+        raise ValueError("artifact bundle identity does not match manifest")
     if len(policy.manifest_bundle_sha256) != 32:
         raise ValueError("manifest bundle hash must be exactly 32 bytes")
     for value, name in ((policy.magic, "magic"), (policy.target_id, "target_id"),
@@ -50,14 +108,28 @@ def _validate_policy(artifact: InspectedArtifact, policy: As5prSignPolicy) -> No
             raise ValueError(f"{name} must be a u32")
 
 
+def _validate_artifact(artifact: InspectedArtifact) -> None:
+    identity = artifact.identity
+    if artifact.source_file_sha256 != identity.source_file_sha256:
+        raise ValueError("source hash is inconsistent with artifact identity")
+    if artifact.segments != identity.segments:
+        raise ValueError("artifact segments are inconsistent with artifact identity")
+    normalized = normalize_segments(artifact.segments, start=identity.normalization_start,
+                                    end=identity.normalization_end, gap_fill=identity.gap_fill)
+    if not hmac.compare_digest(normalized, artifact.normalized_payload):
+        raise ValueError("normalized payload is inconsistent with artifact segments")
+    if not hmac.compare_digest(hashlib.sha256(normalized).digest(),
+                               identity.normalized_payload_sha256):
+        raise ValueError("normalized payload hash is inconsistent with artifact identity")
+    if not hmac.compare_digest(compute_artifact_id(identity), artifact.artifact_id):
+        raise ValueError("artifact identity is inconsistent")
+
+
 def sign_as5pr(artifact: InspectedArtifact, policy: As5prSignPolicy, key: bytes) -> SignedArtifact:
     _key(key)
     _validate_policy(artifact, policy)
-    if compute_artifact_id(artifact.identity) != artifact.artifact_id:
-        raise ValueError("artifact identity is inconsistent")
+    _validate_artifact(artifact)
     payload = artifact.normalized_payload
-    if hashlib.sha256(payload).digest() != artifact.identity.normalized_payload_sha256:
-        raise ValueError("normalized payload is inconsistent with artifact identity")
     header = struct.pack("<IIII", policy.magic, len(payload), policy.target_id, policy.version)
     auth_block = header + hmac.new(key, payload + header, hashlib.sha256).digest()
     signed_bytes = payload + auth_block
