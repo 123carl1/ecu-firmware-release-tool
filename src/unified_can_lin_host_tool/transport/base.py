@@ -14,6 +14,7 @@ class LinFrame:
 class CanFrame:
     can_id: int
     data: bytes
+    timestamp_us: int | None = None
 
 
 class BusAdapter(Protocol):

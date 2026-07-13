@@ -199,7 +199,7 @@ _CONFIGS: Mapping[ProjectCode, ProjectReleaseConfig] = MappingProxyType({
         communication_check=CommunicationCheckConfig(0x3000, 5000),
         resource_files=ResourceFileConfig(
             "as5pr_can_boot.elf", "as5pr_can_boot.bin",
-            "dau_fm33_ht_as5pr.elf", "dau_fm33_ht_as5pr.bin",
+            "dau_fm33.elf", "dau_fm33.bin",
             "as5pr_flash_driver.elf", "as5pr_flash_driver.bin",
         ),
         real_flash_enabled=True,

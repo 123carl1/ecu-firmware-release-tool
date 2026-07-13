@@ -20,6 +20,8 @@ def test_as5pr_config_uses_distinct_resource_target_ids() -> None:
     assert config.authentication.app_target_id == 0x41503541
     assert config.authentication.flash_driver_target_id == 0x46503541
     assert config.real_flash_enabled is True
+    assert config.resource_files.app_elf == "dau_fm33.elf"
+    assert config.resource_files.app_bin == "dau_fm33.bin"
 
 
 def test_e68_real_flash_is_disabled_until_identity_contract_exists() -> None:
@@ -40,7 +42,7 @@ def test_config_encoding_is_stable_ascii_json_with_domain_separator() -> None:
     assert encoded == canonical_config_bytes(config)
     assert compute_config_digest(config) == hashlib.sha256(encoded).digest()
     assert compute_config_digest(config).hex() == (
-        "81a133ad54927b2d3dbe62f882362ff25e436e154d28a44358e6c06ccae01148"
+        "dd476644a1ddebede079f886784fdb26ccbae6c52ec01c507726118a013e1ac4"
     )
 
 

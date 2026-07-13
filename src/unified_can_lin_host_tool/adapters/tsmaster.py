@@ -313,7 +313,8 @@ class TsmasterAdapter:
                     msg = buffer[index]
                     if int(msg.FIdentifier) == can_id:
                         data = bytes(msg.FData[item] for item in range(msg.FDLC))
-                        return CanFrame(can_id=int(msg.FIdentifier), data=data)
+                        return CanFrame(can_id=int(msg.FIdentifier), data=data,
+                                        timestamp_us=int(msg.FTimeUs))
             sleep(0.001)
 
         return None

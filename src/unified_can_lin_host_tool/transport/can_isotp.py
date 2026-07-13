@@ -7,7 +7,6 @@ from time import monotonic, sleep
 from unified_can_lin_host_tool.core.cancel import CancellationToken
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 from unified_can_lin_host_tool.core.events import TraceEvent
-from unified_can_lin_host_tool.profile import ToolProfile
 from unified_can_lin_host_tool.trace import TraceLogger
 from unified_can_lin_host_tool.transport.base import BusAdapter, CanFrame
 
@@ -32,15 +31,19 @@ class CanIsoTpTransport:
     def __init__(
         self,
         adapter: BusAdapter,
-        profile: ToolProfile,
+        project_config,
         *,
         sleep_func: SleepFunc = sleep,
         trace_logger: TraceLogger | None = None,
     ) -> None:
-        if profile.bus.type != "CAN":
-            raise HostToolError(ErrorCategory.PROFILE, "CanIsoTpTransport requires a CAN profile")
+        bus_kind = getattr(project_config.bus, "kind", getattr(project_config.bus, "type", None))
+        if bus_kind != "CAN":
+            raise HostToolError(ErrorCategory.PROFILE, "CanIsoTpTransport requires CAN project configuration")
         self._adapter = adapter
-        self._profile = profile
+        self._bus = project_config.bus
+        self._timing = getattr(project_config, "timing", getattr(project_config, "uds", None))
+        if self._timing is None:
+            raise HostToolError(ErrorCategory.PROFILE, "CAN project configuration lacks timing")
         self._sleep = sleep_func
         self._trace = trace_logger
 
@@ -62,7 +65,7 @@ class CanIsoTpTransport:
         return self._poll_response(
             expect_sid=expect_sid,
             expect_prefix=expect_prefix,
-            timeout_ms=timeout_ms or self._profile.uds.poll_timeout_ms,
+            timeout_ms=timeout_ms or self._timing.poll_timeout_ms,
             allow_response_pending=allow_response_pending,
             ignore_invalid_responses=ignore_invalid_responses,
             cancel_token=cancel_token,
@@ -101,15 +104,15 @@ class CanIsoTpTransport:
 
     def _receive_flow_control(self, *, cancel_token: CancellationToken | None) -> tuple[int, float]:
         wait_count = 0
-        deadline = monotonic() + self._profile.uds.p2_ms / 1000.0
+        deadline = monotonic() + self._timing.p2_ms / 1000.0
 
         while monotonic() <= deadline:
             _throw_if_cancelled(cancel_token)
-            frame = self._adapter.receive_can_frame(self._profile.bus.response_id, self._poll_slice_ms(deadline))
+            frame = self._adapter.receive_can_frame(self._bus.response_id, self._poll_slice_ms(deadline))
             if frame is None:
                 continue
             self._write_trace("RX", frame.can_id, frame.data)
-            if frame.can_id != self._profile.bus.response_id or len(frame.data) != CAN_CLASSIC_DLC:
+            if frame.can_id != self._bus.response_id or len(frame.data) != CAN_CLASSIC_DLC:
                 continue
             pci = frame.data[0]
             if (pci & 0xF0) != 0x30:
@@ -121,7 +124,7 @@ class CanIsoTpTransport:
                 wait_count += 1
                 if wait_count > CAN_ISOTP_MAX_WAIT_FRAMES:
                     raise HostToolError(ErrorCategory.TRANSPORT, "CAN ISO-TP FC WAIT exceeds limit")
-                deadline = monotonic() + self._profile.uds.p2_ms / 1000.0
+                deadline = monotonic() + self._timing.p2_ms / 1000.0
                 continue
             if flow_status == 0x02:
                 raise HostToolError(ErrorCategory.TRANSPORT, "CAN ISO-TP receiver reported overflow")
@@ -145,10 +148,10 @@ class CanIsoTpTransport:
 
         while monotonic() <= deadline:
             _throw_if_cancelled(cancel_token)
-            frame = self._adapter.receive_can_frame(self._profile.bus.response_id, self._poll_slice_ms(deadline))
+            frame = self._adapter.receive_can_frame(self._bus.response_id, self._poll_slice_ms(deadline))
             _throw_if_cancelled(cancel_token)
             if frame is None:
-                self._sleep(self._profile.uds.poll_gap_ms / 1000.0)
+                self._sleep(self._timing.poll_gap_ms / 1000.0)
                 continue
             self._write_trace("RX", frame.can_id, frame.data)
             try:
@@ -184,7 +187,7 @@ class CanIsoTpTransport:
         deadline: float,
         cancel_token: CancellationToken | None,
     ) -> tuple[bytes, tuple[CanFrame, ...]]:
-        if first_frame.can_id != self._profile.bus.response_id:
+        if first_frame.can_id != self._bus.response_id:
             raise HostToolError(ErrorCategory.TRANSPORT, "CAN response ID mismatch")
         if len(first_frame.data) != CAN_CLASSIC_DLC:
             raise HostToolError(ErrorCategory.TRANSPORT, "CAN response frame must be 8 bytes")
@@ -209,11 +212,11 @@ class CanIsoTpTransport:
         expected_sequence = 1
         while len(payload) < total_len and monotonic() <= deadline:
             _throw_if_cancelled(cancel_token)
-            frame = self._adapter.receive_can_frame(self._profile.bus.response_id, self._poll_slice_ms(deadline))
+            frame = self._adapter.receive_can_frame(self._bus.response_id, self._poll_slice_ms(deadline))
             if frame is None:
                 continue
             self._write_trace("RX", frame.can_id, frame.data)
-            if frame.can_id != self._profile.bus.response_id or len(frame.data) != CAN_CLASSIC_DLC:
+            if frame.can_id != self._bus.response_id or len(frame.data) != CAN_CLASSIC_DLC:
                 raise HostToolError(ErrorCategory.TRANSPORT, "CAN ISO-TP consecutive frame is invalid")
             pci = frame.data[0]
             if (pci & 0xF0) != 0x20 or (pci & 0x0F) != expected_sequence:
@@ -232,16 +235,16 @@ class CanIsoTpTransport:
 
     def _send_request_frame(self, data: bytes, *, cancel_token: CancellationToken | None) -> None:
         _throw_if_cancelled(cancel_token)
-        padded = _pad(data, self._profile.bus.padding)
-        self._adapter.send_can_frame(self._profile.bus.request_id, padded)
-        self._write_trace("TX", self._profile.bus.request_id, padded)
-        if self._profile.uds.frame_gap_ms > 0:
-            self._sleep(self._profile.uds.frame_gap_ms / 1000.0)
+        padded = _pad(data, self._bus.padding)
+        self._adapter.send_can_frame(self._bus.request_id, padded)
+        self._write_trace("TX", self._bus.request_id, padded)
+        if self._timing.frame_gap_ms > 0:
+            self._sleep(self._timing.frame_gap_ms / 1000.0)
         _throw_if_cancelled(cancel_token)
 
     def _poll_slice_ms(self, deadline: float) -> int:
         remaining_ms = max(1, int((deadline - monotonic()) * 1000))
-        return min(remaining_ms, max(1, self._profile.uds.poll_gap_ms))
+        return min(remaining_ms, max(1, self._timing.poll_gap_ms))
 
     def _write_trace(self, direction: str, frame_id: int, data: bytes) -> None:
         if self._trace is not None:

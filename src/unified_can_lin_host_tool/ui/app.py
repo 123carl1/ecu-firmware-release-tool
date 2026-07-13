@@ -5,7 +5,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from unified_can_lin_host_tool.ui.main_window import MainWindow
+from unified_can_lin_host_tool.ui.release_workspace import ReleaseMainWindow
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     app = QApplication.instance() or QApplication(sys.argv[:1])
-    window = MainWindow()
+    window = ReleaseMainWindow()
     if args.smoke:
         app.processEvents()
         print("UI SMOKE OK")
