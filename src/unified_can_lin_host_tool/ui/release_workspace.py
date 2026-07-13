@@ -82,19 +82,19 @@ class ReleaseMainWindow(QMainWindow):
             self.log.appendPlainText("请选择存在的 .erel 文件")
             return
         if operation == "inspect":
-            arguments = ["-m", "unified_can_lin_host_tool.cli.release", "inspect", str(package), "--project", project]
+            arguments = ["inspect", str(package), "--project", project]
         elif operation == "probe":
-            arguments = ["-m", "unified_can_lin_host_tool.cli.release", "probe", "--project", project]
+            arguments = ["probe", "--project", project]
         else:
             mode = "--offline-dry-run" if operation == "dry" else "--real-flash"
-            arguments = ["-m", "unified_can_lin_host_tool.cli.release", "flash", str(package),
-                         "--project", project, mode]
+            arguments = ["flash", str(package), "--project", project, mode]
             if operation == "flash":
                 arguments += ["--confirm-project", project, "--yes-i-know-this-erases-app"]
         process = QProcess(self)
         self._process = process
-        process.setProgram(sys.executable)
-        process.setArguments(arguments)
+        program, process_arguments = release_cli_process_command(arguments)
+        process.setProgram(program)
+        process.setArguments(process_arguments)
         process.readyReadStandardOutput.connect(
             lambda: self.log.appendPlainText(bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace").rstrip())
         )
@@ -115,3 +115,10 @@ class ReleaseMainWindow(QMainWindow):
         if self._process is not None:
             self._process.terminate()
         super().closeEvent(event)
+
+
+def release_cli_process_command(arguments: list[str]) -> tuple[str, list[str]]:
+    """开发态调用 Python 模块，PyInstaller 冻结态调用同目录 CLI。"""
+    if getattr(sys, "frozen", False):
+        return str(Path(sys.executable).with_name("EcuReleaseCLI.exe")), list(arguments)
+    return sys.executable, ["-m", "unified_can_lin_host_tool.cli.release", *arguments]
