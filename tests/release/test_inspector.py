@@ -36,3 +36,19 @@ def test_revalidate_rejects_replaced_source(tmp_path: Path) -> None:
     path.write_bytes(b"CD")
     with pytest.raises(HostToolError, match="source changed"):
         revalidate_source(artifact)
+
+
+def test_inspection_parses_the_same_source_snapshot_used_for_hash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "app.bin"; path.write_bytes(b"AB")
+    original = Path.read_bytes
+    reads = 0
+
+    def counted_read_bytes(self: Path) -> bytes:
+        nonlocal reads
+        reads += 1
+        return original(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+    artifact = inspect_artifact(path, _context())
+    assert artifact.segments[0].data == b"AB"
+    assert reads == 2  # one immutable inspection snapshot plus one final revalidation

@@ -31,11 +31,18 @@ def _finish(segments: list[Segment]) -> tuple[Segment, ...]:
     return tuple(merged)
 
 
-def _parse_hex(path: Path) -> tuple[Segment, ...]:
+def _decode_text(source: bytes, format_name: str) -> list[str]:
+    try:
+        return source.decode("ascii").splitlines()
+    except UnicodeDecodeError as exc:
+        raise _error(f"{format_name} is not ASCII text") from exc
+
+
+def _parse_hex(source: bytes) -> tuple[Segment, ...]:
     segments: list[Segment] = []
     base = 0
     eof = False
-    for line_no, text in enumerate(path.read_text(encoding="ascii").splitlines(), 1):
+    for line_no, text in enumerate(_decode_text(source, "Intel HEX"), 1):
         if not text or not text.startswith(":"):
             raise _error(f"Intel HEX format error at line {line_no}")
         try:
@@ -50,7 +57,8 @@ def _parse_hex(path: Path) -> tuple[Segment, ...]:
         if eof:
             raise _error(f"record after EOF at line {line_no}")
         if kind == 0:
-            segments.append(Segment(base + address, data))
+            if data:
+                segments.append(Segment(base + address, data))
         elif kind == 1:
             if count or address: raise _error(f"invalid EOF at line {line_no}")
             eof = True
@@ -69,10 +77,10 @@ def _parse_hex(path: Path) -> tuple[Segment, ...]:
     return _finish(segments)
 
 
-def _parse_srec(path: Path) -> tuple[Segment, ...]:
+def _parse_srec(source: bytes) -> tuple[Segment, ...]:
     sizes = {"0": 2, "1": 2, "2": 3, "3": 4, "5": 2, "6": 3, "7": 4, "8": 3, "9": 2}
     segments: list[Segment] = []
-    for line_no, text in enumerate(path.read_text(encoding="ascii").splitlines(), 1):
+    for line_no, text in enumerate(_decode_text(source, "S-record"), 1):
         if len(text) < 4 or text[:1] != "S" or text[1:2] not in sizes:
             raise _error(f"unsupported S-record type at line {line_no}")
         try: raw = bytes.fromhex(text[2:])
@@ -90,26 +98,30 @@ def _parse_srec(path: Path) -> tuple[Segment, ...]:
     return _finish(segments)
 
 
-def parse_image(path: Path, *, bin_start: int | None = None) -> tuple[Segment, ...]:
-    path = Path(path)
-    try: suffix = path.suffix.lower()
-    except OSError as exc: raise _error(f"cannot access image: {path}") from exc
+def _parse_image_bytes(path: Path, source: bytes, *, bin_start: int | None = None) -> tuple[Segment, ...]:
+    suffix = path.suffix.lower()
     if suffix == ".bin":
         if bin_start is None: raise _error("bin_start is required for BIN")
         if not isinstance(bin_start, int) or isinstance(bin_start, bool) or bin_start < 0:
             raise _error("bin_start must be a non-negative address")
-        try: data = path.read_bytes()
-        except OSError as exc: raise _error(f"cannot read image: {path}") from exc
-        return _finish([Segment(bin_start, data)])
-    if suffix in (".hex", ".ihex"): return _parse_hex(path)
-    if suffix in (".s19", ".srec", ".s28", ".s37"): return _parse_srec(path)
+        return _finish([Segment(bin_start, source)])
+    if suffix in (".hex", ".ihex"): return _parse_hex(source)
+    if suffix in (".s19", ".srec", ".s28", ".s37"): return _parse_srec(source)
     raise _error(f"unsupported image format: {suffix}")
+
+
+def parse_image(path: Path, *, bin_start: int | None = None) -> tuple[Segment, ...]:
+    path = Path(path)
+    try: source = path.read_bytes()
+    except OSError as exc: raise _error(f"cannot read image: {path}") from exc
+    return _parse_image_bytes(path, source, bin_start=bin_start)
 
 
 def normalize_segments(segments, *, start: int, end: int, gap_fill: int) -> bytes:
     if not isinstance(gap_fill, int) or isinstance(gap_fill, bool) or not 0 <= gap_fill <= 0xFF:
         raise _error("gap_fill must be a byte")
-    if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end < start or end > 0x100000000:
+    if (not isinstance(start, int) or isinstance(start, bool) or not isinstance(end, int)
+            or isinstance(end, bool) or start < 0 or end < start or end > 0x100000000):
         raise _error("invalid normalization range")
     canonical = _finish(list(segments))
     if canonical[0].address < start or canonical[-1].address + len(canonical[-1].data) > end:

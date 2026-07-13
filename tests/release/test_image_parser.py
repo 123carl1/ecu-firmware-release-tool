@@ -43,6 +43,26 @@ def test_hex_merges_adjacent_and_preserves_sparse_segments(tmp_path: Path) -> No
     assert parse_image(image) == (Segment(0x10000, b"ABCD"), Segment(0x10008, b"Z"))
 
 
+def test_hex_ignores_zero_length_data_record_when_other_data_exists(tmp_path: Path) -> None:
+    image = tmp_path / "zero.hex"
+    image.write_text("\n".join((_hex(0, 0), _hex(1, 0, b"A"), _hex(0, 1))), encoding="ascii")
+    assert parse_image(image) == (Segment(1, b"A"),)
+
+
+@pytest.mark.parametrize("suffix", [".hex", ".s19"])
+def test_text_image_read_and_decode_errors_are_file_errors(tmp_path: Path, suffix: str) -> None:
+    missing = tmp_path / f"missing{suffix}"
+    with pytest.raises(HostToolError) as missing_error:
+        parse_image(missing)
+    assert missing_error.value.category.value == "file"
+
+    invalid = tmp_path / f"invalid{suffix}"
+    invalid.write_bytes(b"\xFF")
+    with pytest.raises(HostToolError) as decode_error:
+        parse_image(invalid)
+    assert decode_error.value.category.value == "file"
+
+
 @pytest.mark.parametrize("mutation,match", [("checksum", "checksum"), ("count", "byte count"), ("unknown", "record type"), ("no_eof", "EOF")])
 def test_hex_rejects_malformed_records(tmp_path: Path, mutation: str, match: str) -> None:
     data = _hex(0, 0, b"A")
@@ -78,3 +98,5 @@ def test_normalize_fills_gaps_and_validates_arguments() -> None:
     assert normalize_segments(segments, start=0x10, end=0x15, gap_fill=0xFF) == b"AB\xFF\xFFZ"
     with pytest.raises(HostToolError, match="range"): normalize_segments(segments, start=0x11, end=0x15, gap_fill=0)
     with pytest.raises(HostToolError, match="gap_fill"): normalize_segments(segments, start=0x10, end=0x15, gap_fill=256)
+    with pytest.raises(HostToolError, match="range"): normalize_segments(segments, start=True, end=0x15, gap_fill=0)
+    with pytest.raises(HostToolError, match="range"): normalize_segments(segments, start=0x10, end=True, gap_fill=0)

@@ -5,7 +5,7 @@ from pathlib import Path
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
 
 from .artifact_identity import compute_artifact_id
-from .image_parser import normalize_segments, parse_image
+from .image_parser import _parse_image_bytes, normalize_segments
 from .models import ArtifactIdentityV1, Segment
 
 
@@ -38,7 +38,7 @@ def inspect_artifact(path: Path, context: InspectionContext) -> InspectedArtifac
     except OSError as exc: raise HostToolError(ErrorCategory.FILE, f"cannot read source: {source_path}") from exc
     source_hash = hashlib.sha256(source).digest()
     bin_start = context.normalization_start if source_path.suffix.lower() == ".bin" else None
-    segments = parse_image(source_path, bin_start=bin_start)
+    segments = _parse_image_bytes(source_path, source, bin_start=bin_start)
     normalized = normalize_segments(segments, start=context.normalization_start, end=context.normalization_end, gap_fill=context.gap_fill)
     identity = ArtifactIdentityV1(target_id=context.target_id, bundle_id=context.bundle_id, profile_id=context.profile_id, profile_version=context.profile_version, profile_sha256=context.profile_sha256, sign_policy_id=context.sign_policy_id, source_file_sha256=source_hash, normalization_start=context.normalization_start, normalization_end=context.normalization_end, gap_fill=context.gap_fill, segments=segments, normalized_payload_sha256=hashlib.sha256(normalized).digest())
     artifact = InspectedArtifact(source_path, source_hash, segments, normalized, identity, compute_artifact_id(identity))
