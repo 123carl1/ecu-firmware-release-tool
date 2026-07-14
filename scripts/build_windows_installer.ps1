@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
-function Assert-Usb2xxxRuntimeFile {
+function Get-Usb2xxxRuntimeFileValidationError {
     param(
         [Parameter(Mandatory)]
         [string]$LiteralPath,
@@ -21,11 +21,11 @@ function Assert-Usb2xxxRuntimeFile {
 
     $File = Get-Item -LiteralPath $LiteralPath -ErrorAction Stop
     if ($File.Length -ne $ExpectedSize) {
-        throw "$($File.Name) size mismatch: expected $ExpectedSize, actual $($File.Length)"
+        return "$($File.Name) size mismatch: expected $ExpectedSize, actual $($File.Length)"
     }
     $ActualSha256 = (Get-FileHash -LiteralPath $LiteralPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($ActualSha256 -ne $ExpectedSha256) {
-        throw "$($File.Name) SHA256 mismatch: expected $ExpectedSha256, actual $ActualSha256"
+        return "$($File.Name) SHA256 mismatch: expected $ExpectedSha256, actual $ActualSha256"
     }
 }
 
@@ -49,12 +49,17 @@ if (-not (Test-Path -LiteralPath $UsbDll -PathType Leaf) -or
     -not (Test-Path -LiteralPath $LibusbDll -PathType Leaf)) {
     throw "USB2XXX runtime DLLs not found under $UsbDllDir"
 }
-Assert-Usb2xxxRuntimeFile -LiteralPath $UsbDll `
-    -ExpectedSize 538112 `
-    -ExpectedSha256 '7857f3c43b5f5f41414da0ce04f2914d45af805a7ad0e14a0aa84b6a16a42d1b'
-Assert-Usb2xxxRuntimeFile -LiteralPath $LibusbDll `
-    -ExpectedSize 157696 `
-    -ExpectedSha256 'a8c91f0ff68fb7802a9f4416728f0eeb4d99af4ceaa4ef7dfe9374e76e375018'
+$UsbRuntimeValidationErrors = @(
+    Get-Usb2xxxRuntimeFileValidationError -LiteralPath $UsbDll `
+        -ExpectedSize 538112 `
+        -ExpectedSha256 '7857f3c43b5f5f41414da0ce04f2914d45af805a7ad0e14a0aa84b6a16a42d1b'
+    Get-Usb2xxxRuntimeFileValidationError -LiteralPath $LibusbDll `
+        -ExpectedSize 157696 `
+        -ExpectedSha256 'a8c91f0ff68fb7802a9f4416728f0eeb4d99af4ceaa4ef7dfe9374e76e375018'
+)
+if ($UsbRuntimeValidationErrors.Count -gt 0) {
+    throw ($UsbRuntimeValidationErrors -join [Environment]::NewLine)
+}
 if ($ValidateUsb2xxxRuntimeOnly) {
     Write-Output "USB2XXX runtime validation passed: $UsbDllDir"
     return

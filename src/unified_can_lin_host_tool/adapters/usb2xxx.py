@@ -37,6 +37,7 @@ class HARDWARE_INFO(Structure):
         ("ProductModel", c_char * 16),
         ("Version", c_uint),
         ("CANChannelNum", c_char),
+        ("LINChannelNum", c_char),
         ("PWMChannelNum", c_char),
         ("HaveCANFD", c_char),
         ("DIChannelNum", c_char),

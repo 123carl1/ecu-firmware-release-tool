@@ -1,4 +1,4 @@
-from ctypes import c_uint
+from ctypes import addressof, c_ubyte, c_uint, sizeof
 from pathlib import Path
 import subprocess
 import tempfile
@@ -6,12 +6,13 @@ import tempfile
 from unified_can_lin_host_tool.adapters import usb2xxx
 from unified_can_lin_host_tool.adapters.usb2xxx import (
     CAN_MSG,
+    HARDWARE_INFO,
     Usb2xxxAdapter,
     _Usb2xxxApi,
 )
 
 
-def test_installer_runtime_validation_rejects_same_size_tampered_dlls():
+def test_installer_runtime_validation_reports_all_same_size_tampered_dlls():
     script = Path("scripts/build_windows_installer.ps1").resolve()
     script_text = script.read_text(encoding="utf-8")
     assert "ValidateUsb2xxxRuntimeOnly" in script_text, (
@@ -43,6 +44,7 @@ def test_installer_runtime_validation_rejects_same_size_tampered_dlls():
     output = result.stdout + result.stderr
     assert result.returncode != 0
     assert "USB2XXX.dll SHA256 mismatch" in output
+    assert "libusb-1.0.dll SHA256 mismatch" in output
 
 
 def test_default_dll_search_uses_only_runtime_and_common_install_locations(monkeypatch):
@@ -63,6 +65,55 @@ def test_default_dll_search_uses_only_runtime_and_common_install_locations(monke
 
     assert usb2xxx._default_usb2xxx_dll() == str(configured)
     assert checked_paths == [configured, frozen, executable, common_install]
+
+
+def test_hardware_info_channel_fields_match_official_sdk_offsets():
+    lin_field = getattr(HARDWARE_INFO, "LINChannelNum", None)
+    actual_offsets = (
+        HARDWARE_INFO.CANChannelNum.offset,
+        None if lin_field is None else lin_field.offset,
+        HARDWARE_INFO.PWMChannelNum.offset,
+        HARDWARE_INFO.HaveCANFD.offset,
+    )
+
+    assert actual_offsets == (36, 37, 38, 39)
+
+
+def test_hardware_info_raw_bytes_keep_can_lin_pwm_and_canfd_sentinels():
+    hardware = HARDWARE_INFO()
+    raw = (c_ubyte * sizeof(HARDWARE_INFO)).from_address(addressof(hardware))
+    raw[36], raw[37], raw[38], raw[39] = 2, 3, 5, 7
+
+    actual_values = (
+        usb2xxx._byte_value(hardware.CANChannelNum),
+        usb2xxx._byte_value(getattr(hardware, "LINChannelNum", b"\0")),
+        usb2xxx._byte_value(hardware.PWMChannelNum),
+        usb2xxx._byte_value(hardware.HaveCANFD),
+    )
+
+    assert actual_values == (2, 3, 5, 7)
+
+
+def test_read_device_uses_official_have_canfd_byte_offset():
+    class Dll:
+        @staticmethod
+        def DEV_GetDeviceInfo(_handle, _device, _functions):
+            return 1
+
+        @staticmethod
+        def DEV_GetHardwareInfo(_handle, hardware_pointer):
+            hardware = hardware_pointer._obj
+            raw = (c_ubyte * sizeof(HARDWARE_INFO)).from_address(addressof(hardware))
+            raw[36], raw[37], raw[38], raw[39] = 2, 3, 0, 1
+            return 1
+
+    api = _Usb2xxxApi.__new__(_Usb2xxxApi)
+    api.dll = Dll()
+
+    info = api.read_device(101)
+
+    assert info["can_channel_count"] == 2
+    assert info["is_can_fd"] is True
 
 
 class FakeUsb2xxxApi:
