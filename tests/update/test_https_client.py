@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import http.client
 import io
+import ssl
 from unittest.mock import patch
 
 import pytest
@@ -166,3 +168,22 @@ def test_read_timeout_is_applied_before_response_headers_are_read():
         )
 
     assert result == b"ok"
+
+
+@pytest.mark.parametrize("failure", [ssl.SSLError("TLS failed"), OSError("trust store failed")])
+def test_tls_context_creation_failure_maps_to_stable_network_error(failure):
+    with patch("ssl.create_default_context", side_effect=failure), pytest.raises(UpdateNetworkError) as exc_info:
+        SafeHttpsClient().read_bytes("https://github.com/o/r/update.json", max_bytes=64)
+
+    assert exc_info.value.code == "UPDATE_NETWORK_UNAVAILABLE"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [http.client.HTTPException("connection failed"), ValueError("invalid connection")],
+)
+def test_https_connection_construction_failure_maps_to_stable_network_error(failure):
+    with patch("http.client.HTTPSConnection", side_effect=failure), pytest.raises(UpdateNetworkError) as exc_info:
+        SafeHttpsClient().read_bytes("https://github.com/o/r/update.json", max_bytes=64)
+
+    assert exc_info.value.code == "UPDATE_NETWORK_UNAVAILABLE"

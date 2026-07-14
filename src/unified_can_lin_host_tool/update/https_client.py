@@ -96,14 +96,16 @@ class SafeHttpsClient:
         while True:
             validate_github_https_url(current_url)
             parsed = urlsplit(current_url)
-            connection = http.client.HTTPSConnection(
-                parsed.hostname,
-                443,
-                timeout=connect_timeout_s,
-                context=ssl.create_default_context(),
-            )
+            connection = None
             response = None
             try:
+                context = ssl.create_default_context()
+                connection = http.client.HTTPSConnection(
+                    parsed.hostname,
+                    443,
+                    timeout=connect_timeout_s,
+                    context=context,
+                )
                 headers = {
                     "Accept": "application/octet-stream",
                     "Connection": "close",
@@ -153,7 +155,8 @@ class SafeHttpsClient:
             finally:
                 if response is not None:
                     response.close()
-                connection.close()
+                if connection is not None:
+                    connection.close()
 
     @staticmethod
     def _validate_limits(max_bytes: int, connect_timeout_s: float, read_timeout_s: float) -> None:
