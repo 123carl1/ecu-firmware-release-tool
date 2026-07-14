@@ -98,6 +98,69 @@ def test_assert_public_key_matches_selected_key(tmp_path):
         release_signing.assert_public_key_matches(Ed25519PrivateKey.generate(), public_keys_path, "release-v1")
 
 
+def test_assert_public_key_rejects_duplicate_key_id(tmp_path):
+    private_key = Ed25519PrivateKey.generate()
+    public_hex = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    ).hex()
+    public_keys_path = tmp_path / "keys.json"
+    public_keys_path.write_text(
+        f'{{"release-v1":"{public_hex}","release-v1":"{public_hex}"}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="重复 keyId"):
+        release_signing.assert_public_key_matches(private_key, public_keys_path, "release-v1")
+
+
+def test_assert_public_key_rejects_more_than_four_keys(tmp_path):
+    private_key = Ed25519PrivateKey.generate()
+    public_hex = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    ).hex()
+    public_keys_path = tmp_path / "keys.json"
+    public_keys_path.write_text(
+        json.dumps(
+            {
+                "release-v1": public_hex,
+                "release-v2": "01" * 32,
+                "release-v3": "02" * 32,
+                "release-v4": "03" * 32,
+                "release-v5": "04" * 32,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="4"):
+        release_signing.assert_public_key_matches(private_key, public_keys_path, "release-v1")
+
+
+@pytest.mark.parametrize(
+    ("invalid_document", "message"),
+    [
+        (lambda public_hex: {"release-v1": public_hex, "release-v2": public_hex}, "重复公钥"),
+        (lambda public_hex: {"release-v1": public_hex, "Invalid-Key": "01" * 32}, "keyId"),
+        (lambda public_hex: {"release-v1": public_hex.upper()}, "小写十六进制"),
+        (lambda public_hex: {"release-v1": {"publicKey": public_hex}}, "小写十六进制"),
+    ],
+    ids=["duplicate-public-key", "invalid-key-id", "uppercase-hex", "unknown-structure"],
+)
+def test_assert_public_key_uses_client_strict_parser(tmp_path, invalid_document, message):
+    private_key = Ed25519PrivateKey.generate()
+    public_hex = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    ).hex()
+    public_keys_path = tmp_path / "keys.json"
+    public_keys_path.write_text(json.dumps(invalid_document(public_hex)), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match=message):
+        release_signing.assert_public_key_matches(private_key, public_keys_path, "release-v1")
+
+
 def test_sign_update_file_writes_raw_64_byte_signature(tmp_path, monkeypatch):
     private_key = Ed25519PrivateKey.generate()
     monkeypatch.setenv("UPDATE_SIGNING_KEY_PEM", _pem(private_key))

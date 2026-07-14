@@ -153,6 +153,50 @@ def test_non_utf8_signed_json_is_rejected_after_signature_verification(ed25519_k
         verify_signed_update(raw, private_key.sign(raw), {"test-v1": public_key}, "owner/ecu-firmware-release-tool")
 
 
+def test_unpaired_surrogate_is_reported_as_stable_metadata_error(ed25519_key_pair):
+    private_key, public_key = ed25519_key_pair
+    payload = {
+        "schemaVersion": 1,
+        "repository": "owner/ecu-firmware-release-tool",
+        "version": "0.2.1",
+        "tag": "v0.2.1",
+        "commit": "01" * 20,
+        "generatedAt": "2026-07-14T12:00:00Z",
+        "channel": "stable",
+        "releaseNotes": "\ud800",
+        "installer": {
+            "name": "EcuReleaseTool_Setup_0.2.1.exe",
+            "size": 123,
+            "sha256": "ab" * 32,
+        },
+        "keyId": "test-v1",
+    }
+    raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+
+    with pytest.raises(UpdateMetadataError, match="UTF-8") as raised:
+        verify_signed_update(
+            raw,
+            private_key.sign(raw),
+            {"test-v1": public_key},
+            "owner/ecu-firmware-release-tool",
+        )
+
+    assert raised.value.code == "UPDATE_METADATA_INVALID"
+
+
+def test_generated_at_must_be_a_real_utc_second(ed25519_key_pair):
+    private_key, public_key = ed25519_key_pair
+    raw, signature = signed_update(private_key, generatedAt="2026-99-99T99:99:99Z")
+
+    with pytest.raises(UpdateMetadataError, match="generatedAt"):
+        verify_signed_update(
+            raw,
+            signature,
+            {"test-v1": public_key},
+            "owner/ecu-firmware-release-tool",
+        )
+
+
 def test_locator_only_extracts_a_strict_tag():
     raw = json.dumps({"tag": "v0.2.1", "repository": "untrusted/value"}).encode()
     assert parse_locator_tag(raw) == "v0.2.1"

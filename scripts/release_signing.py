@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+from importlib import import_module
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,15 @@ import tempfile
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+
+_SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
+if str(_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SOURCE_ROOT))
+
+parse_release_public_keys = import_module(
+    "unified_can_lin_host_tool.update.release_keys"
+).parse_release_public_keys
 
 
 _SIGNING_KEY_ENVIRONMENT = "UPDATE_SIGNING_KEY_PEM"
@@ -106,10 +116,11 @@ def assert_public_key_matches(
     """确认环境私钥对应仓库中指定 keyId 的固化公钥。"""
 
     try:
-        document = json.loads(public_keys_path.read_text(encoding="utf-8"))
-        encoded = document[key_id]
-        expected = bytes.fromhex(encoded)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        public_keys = parse_release_public_keys(public_keys_path.read_bytes())
+        expected = public_keys[key_id]
+    except OSError as exc:
+        raise RuntimeError("发布公钥文件无法读取") from exc
+    except KeyError as exc:
         raise RuntimeError("发布公钥文件或 keyId 无效") from exc
     actual = private_key.public_key().public_bytes(
         serialization.Encoding.Raw,

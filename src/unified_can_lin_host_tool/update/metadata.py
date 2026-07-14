@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import re
 from typing import Any
@@ -79,7 +80,23 @@ def _parse_json_object(raw: bytes) -> dict[str, Any]:
         raise UpdateMetadataError("更新信息不是有效 JSON") from exc
     if type(document) is not dict:
         raise UpdateMetadataError("更新信息顶层必须是 JSON 对象")
+    _validate_utf8_strings(document)
     return document
+
+
+def _validate_utf8_strings(value: Any) -> None:
+    if type(value) is str:
+        try:
+            value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise UpdateMetadataError("更新信息包含无法编码为 UTF-8 的字符串") from exc
+    elif type(value) is dict:
+        for key, item in value.items():
+            _validate_utf8_strings(key)
+            _validate_utf8_strings(item)
+    elif type(value) is list:
+        for item in value:
+            _validate_utf8_strings(item)
 
 
 def _check_raw_size(raw: bytes) -> None:
@@ -203,6 +220,12 @@ def verify_signed_update(
     generated_at = _require_string(document, "generatedAt")
     if _GENERATED_AT_RE.fullmatch(generated_at) is None:
         raise UpdateMetadataError("generatedAt 必须是 UTC 秒级时间")
+    try:
+        parsed_generated_at = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as exc:
+        raise UpdateMetadataError("generatedAt 必须是真实 UTC 秒级时间") from exc
+    if parsed_generated_at.strftime("%Y-%m-%dT%H:%M:%SZ") != generated_at:
+        raise UpdateMetadataError("generatedAt 必须使用规范 UTC 秒级格式")
 
     channel = _require_string(document, "channel")
     if channel != "stable":
