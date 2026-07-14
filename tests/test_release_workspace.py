@@ -162,7 +162,9 @@ class ReleaseWorkspaceTests(unittest.TestCase):
 
     def test_available_update_prompt_contains_version_notes_and_size(self):
         info = update_info(size=1536)
-        window = ReleaseMainWindow(auto_check=False)
+        identity = ToolIdentity("0.2.0", "01" * 20, "", "", False)
+        with patch.object(release_workspace, "get_tool_identity", return_value=identity):
+            window = ReleaseMainWindow(auto_check=False)
         try:
             with patch.object(window, "_prompt_update", return_value=False) as prompt:
                 window._handle_update_check_result(info)
