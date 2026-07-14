@@ -87,7 +87,9 @@ def test_publish_verifies_assets_before_making_draft_public():
     create = publish_text.index("gh release create")
     digest_check = publish_text.index(".digest")
     make_public = publish_text.index("gh release edit")
-    assert "releases/tags/$env:GITHUB_REF_NAME" in publish_text
+    assert "select(.tag_name == $TagJson and .draft == true)" in publish_text
+    assert '"repos/$env:GITHUB_REPOSITORY/releases/$ReleaseId"' in publish_text
+    assert "releases/tags/$env:GITHUB_REF_NAME" not in publish_text
     absence_check = publish_text.index("releases?per_page=100")
     assert "--draft --verify-tag" in publish_text
     assert "release_signing.py assert-key" in publish_text

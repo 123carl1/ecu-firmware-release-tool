@@ -152,7 +152,9 @@ jobs:
           )
           gh release create $env:GITHUB_REF_NAME @Assets --repo $env:GITHUB_REPOSITORY --draft --verify-tag --title "ECU Firmware Release Tool $($env:GITHUB_REF_NAME.Substring(1))" --notes-file docs/releases/0.2.0.md
           if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed.' }
-          $Release = gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" | ConvertFrom-Json
+          $ReleaseId = gh api -H 'X-GitHub-Api-Version: 2022-11-28' --paginate "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == $TagJson and .draft == true) | .id"
+          if (-not $ReleaseId) { throw 'Created draft release was not found in the release list.' }
+          $Release = gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$env:GITHUB_REPOSITORY/releases/$ReleaseId" | ConvertFrom-Json
           foreach ($Path in $Assets) {
             $Local = Get-Item -LiteralPath $Path
             $Remote = $Release.assets | Where-Object name -eq $Local.Name
