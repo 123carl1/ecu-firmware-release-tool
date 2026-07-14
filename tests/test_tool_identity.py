@@ -2,7 +2,19 @@ import json
 
 import pytest
 
-from unified_can_lin_host_tool.tool_identity import ToolIdentity, load_tool_identity
+from unified_can_lin_host_tool import tool_identity as tool_identity_module
+from unified_can_lin_host_tool.tool_identity import (
+    ToolIdentity,
+    get_tool_identity,
+    load_tool_identity,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_tool_identity_cache():
+    get_tool_identity.cache_clear()
+    yield
+    get_tool_identity.cache_clear()
 
 
 def _official_payload(**changes):
@@ -15,6 +27,110 @@ def _official_payload(**changes):
     }
     payload.update(changes)
     return json.dumps(payload).encode()
+
+
+class _IdentityResource:
+    def __init__(self, raw, calls):
+        self._raw = raw
+        self._calls = calls
+
+    def joinpath(self, name):
+        self._calls["joinpath"] += 1
+        assert name == "_tool_build_identity.json"
+        return self
+
+    def read_bytes(self):
+        self._calls["read_bytes"] += 1
+        return self._raw
+
+
+def test_get_tool_identity_caches_metadata_and_resource_reads(monkeypatch):
+    calls = {"metadata": 0, "files": 0, "joinpath": 0, "read_bytes": 0}
+    resource = _IdentityResource(_official_payload(), calls)
+
+    def read_version(name):
+        calls["metadata"] += 1
+        assert name == "unified-can-lin-host-tool"
+        return "0.2.0"
+
+    def find_resources(package):
+        calls["files"] += 1
+        assert package == "unified_can_lin_host_tool"
+        return resource
+
+    monkeypatch.setattr(tool_identity_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(tool_identity_module.importlib.metadata, "version", read_version)
+    monkeypatch.setattr(tool_identity_module.importlib.resources, "files", find_resources)
+
+    first = get_tool_identity()
+    second = get_tool_identity()
+
+    assert first is second
+    assert calls == {"metadata": 1, "files": 1, "joinpath": 1, "read_bytes": 1}
+
+
+def test_get_tool_identity_returns_unknown_development_identity_without_metadata(
+    monkeypatch,
+):
+    def metadata_missing(name):
+        raise tool_identity_module.importlib.metadata.PackageNotFoundError(name)
+
+    def reject_resource_read(_package):
+        raise AssertionError("非冻结环境不得读取构建身份资源")
+
+    monkeypatch.setattr(tool_identity_module.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(
+        tool_identity_module.importlib.metadata, "version", metadata_missing
+    )
+    monkeypatch.setattr(
+        tool_identity_module.importlib.resources, "files", reject_resource_read
+    )
+
+    assert get_tool_identity() == ToolIdentity(
+        "0+unknown", "development", "", "", False
+    )
+
+
+def test_get_tool_identity_does_not_read_resource_when_not_frozen(monkeypatch):
+    def reject_resource_read(_package):
+        raise AssertionError("非冻结环境不得读取构建身份资源")
+
+    monkeypatch.setattr(tool_identity_module.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(
+        tool_identity_module.importlib.metadata, "version", lambda _name: "0.2.0"
+    )
+    monkeypatch.setattr(
+        tool_identity_module.importlib.resources, "files", reject_resource_read
+    )
+
+    assert get_tool_identity() == ToolIdentity(
+        "0.2.0", "development", "", "", False
+    )
+
+
+def test_get_tool_identity_reads_and_validates_frozen_official_identity(monkeypatch):
+    calls = {"joinpath": 0, "read_bytes": 0}
+    raw = _official_payload()
+    resource = _IdentityResource(raw, calls)
+
+    monkeypatch.setattr(tool_identity_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        tool_identity_module.importlib.metadata, "version", lambda _name: "0.2.0"
+    )
+    monkeypatch.setattr(
+        tool_identity_module.importlib.resources,
+        "files",
+        lambda package: resource if package == "unified_can_lin_host_tool" else None,
+    )
+
+    assert get_tool_identity() == ToolIdentity(
+        "0.2.0",
+        "01" * 20,
+        "2026-07-14T12:00:00Z",
+        "owner/ecu-firmware-release-tool",
+        True,
+    )
+    assert calls == {"joinpath": 1, "read_bytes": 1}
 
 
 def test_official_identity_requires_matching_installed_version():
