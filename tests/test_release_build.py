@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,9 @@ import pytest
 from scripts.release_build import (
     ToolIdentity,
     _normalize_version_info,
+    read_locked_requirements,
+    validate_distribution_inventory,
+    validate_pyinstaller_archive,
     fetch_usb2xxx_runtime,
     prepare_build,
     read_project_version,
@@ -61,6 +65,103 @@ def test_version_info_normalization_removes_inno_padding():
     assert _normalize_version_info(
         {"FileVersion": "0.2.0.0             ", "ProductVersion": "0.2.0  "}
     ) == {"FileVersion": "0.2.0.0", "ProductVersion": "0.2.0"}
+
+
+def test_locked_requirements_and_distribution_inventory_are_exact(tmp_path: Path):
+    lock = tmp_path / "release.lock"
+    lock.write_text(
+        "Alpha_Pkg==1.2.3 \\\n+    --hash=sha256:" + "01" * 32 + "\n"
+        "beta-pkg==4.5.6 \\\n+    --hash=sha256:" + "02" * 32 + "\n",
+        encoding="utf-8",
+    )
+    locked = read_locked_requirements(lock)
+
+    assert locked == {"alpha-pkg": "1.2.3", "beta-pkg": "4.5.6"}
+    validate_distribution_inventory(
+        {
+            "alpha-pkg": "1.2.3",
+            "beta_pkg": "4.5.6",
+            "unified-can-lin-host-tool": "0.2.0",
+        },
+        locked,
+        project_name="unified-can-lin-host-tool",
+        project_version="0.2.0",
+    )
+    with pytest.raises(ValueError, match="严格一致"):
+        validate_distribution_inventory(
+            {
+                "alpha-pkg": "1.2.3",
+                "beta-pkg": "4.5.6",
+                "unexpected": "9.9.9",
+                "unified-can-lin-host-tool": "0.2.0",
+            },
+            locked,
+            project_name="unified-can-lin-host-tool",
+            project_version="0.2.0",
+        )
+
+
+def test_archive_validation_checks_embedded_identity_keys_metadata_and_cli_dlls():
+    identity = ToolIdentity(
+        version="0.2.0", commit="01" * 20,
+        build_time_utc="2026-07-14T12:00:00Z",
+        repository="", official_build=False,
+    )
+    identity_raw = json.dumps(
+        {
+            "version": identity.version,
+            "commit": identity.commit,
+            "buildTimeUtc": identity.build_time_utc,
+            "repository": identity.repository,
+            "officialBuild": identity.official_build,
+        }
+    ).encode()
+    keys = b'{"release-v1":"' + b"41" * 32 + b'"}'
+    usb = b"usb-runtime"
+    libusb = b"libusb-runtime"
+    entries = {
+        "unified_can_lin_host_tool\\_tool_build_identity.json": identity_raw,
+        "unified_can_lin_host_tool\\update\\release_public_keys.json": keys,
+        "unified_can_lin_host_tool-0.2.0.dist-info\\METADATA": (
+            b"Metadata-Version: 2.4\nName: unified-can-lin-host-tool\nVersion: 0.2.0\n"
+        ),
+        "USB2XXX.dll": usb,
+        "libusb-1.0.dll": libusb,
+    }
+    report = validate_pyinstaller_archive(
+        entries,
+        identity=identity,
+        public_keys=keys,
+        role="cli",
+        usb_hashes={
+            "USB2XXX.dll": hashlib.sha256(usb).hexdigest(),
+            "libusb-1.0.dll": hashlib.sha256(libusb).hexdigest(),
+        },
+    )
+
+    assert report["metadataVersion"] == "0.2.0"
+    assert report["identitySha256"] == hashlib.sha256(identity_raw).hexdigest()
+    damaged = dict(entries)
+    damaged["USB2XXX.dll"] = usb + b"x"
+    with pytest.raises(ValueError, match="USB2XXX.dll"):
+        validate_pyinstaller_archive(
+            damaged,
+            identity=identity,
+            public_keys=keys,
+            role="cli",
+            usb_hashes={
+                "USB2XXX.dll": hashlib.sha256(usb).hexdigest(),
+                "libusb-1.0.dll": hashlib.sha256(libusb).hexdigest(),
+            },
+        )
+    with pytest.raises(ValueError, match="GUI"):
+        validate_pyinstaller_archive(
+            entries,
+            identity=identity,
+            public_keys=keys,
+            role="gui",
+            usb_hashes={},
+        )
 
 
 def test_read_project_version_rejects_non_three_part_version(tmp_path: Path):
@@ -158,7 +259,9 @@ def test_fetch_usb2xxx_rejects_changed_dll_before_copy(tmp_path: Path):
     assert not (output / "libusb-1.0.dll").exists()
 
 
-def test_fetch_usb2xxx_populates_an_existing_empty_output_directory(tmp_path: Path):
+def test_fetch_usb2xxx_populates_an_existing_empty_output_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     sdk = tmp_path / "sdk-valid"
     sdk.mkdir()
     _git(sdk, "init", "-b", "main")
@@ -191,8 +294,17 @@ def test_fetch_usb2xxx_populates_an_existing_empty_output_directory(tmp_path: Pa
     )
     output = tmp_path / "existing-empty"
     output.mkdir()
+    actual_mkdtemp = tempfile.mkdtemp
+    temp_parents: list[Path] = []
+
+    def record_mkdtemp(*, prefix: str, dir: Path) -> str:
+        temp_parents.append(Path(dir).resolve())
+        return actual_mkdtemp(prefix=prefix, dir=dir)
+
+    monkeypatch.setattr("scripts.release_build.tempfile.mkdtemp", record_mkdtemp)
 
     usb, libusb = fetch_usb2xxx_runtime(source, output)
 
+    assert temp_parents == [output.parent.resolve()]
     assert usb.read_bytes() == payloads["USB2XXX.dll"]
     assert libusb.read_bytes() == payloads["libusb-1.0.dll"]

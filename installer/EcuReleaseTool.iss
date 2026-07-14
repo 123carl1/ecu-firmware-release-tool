@@ -27,6 +27,7 @@ RestartApplications=no
 [Files]
 Source: "..\dist\windows\EcuReleaseTool.exe"; DestDir: "{app}"
 Source: "..\dist\windows\EcuReleaseCLI.exe"; DestDir: "{app}"
+Source: "..\THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"
 Source: "check_running_processes.ps1"; Flags: dontcopy
 Source: "check_running_processes.ps1"; DestDir: "{app}"
 

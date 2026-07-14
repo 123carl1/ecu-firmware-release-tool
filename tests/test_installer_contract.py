@@ -19,6 +19,12 @@ def test_installer_requires_build_supplied_version():
     assert "OutputBaseFilename=EcuReleaseTool_Setup_{#MyAppVersion}" in text
 
 
+def test_installer_includes_third_party_notices():
+    text = _installer_text()
+
+    assert 'Source: "..\\THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"' in text
+
+
 def test_setup_disables_automatic_process_termination_and_restart():
     text = _installer_text()
 

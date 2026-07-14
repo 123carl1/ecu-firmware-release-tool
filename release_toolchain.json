@@ -4,6 +4,7 @@
     "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe",
     "size": 26216840,
     "sha256": "5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde",
+    "executableSha256": "5f7b89a612c9b8af1d6456cdfcd1dbe5ca630849e79aebced9bee9a6694952ec",
     "installDir": "D:\\software\\Python311"
   },
   "innoSetup": {
@@ -18,6 +19,7 @@
     "version": "8.30.1",
     "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_x64.zip",
     "sha256": "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e",
+    "executableSha256": "17157e2ee8b76fc8b1d8bee607a250e34b8a8023c8bc81822d4b5ee4d78fcb7c",
     "installDir": "D:\\software\\gitleaks\\8.30.1"
   }
 }

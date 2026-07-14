@@ -85,9 +85,20 @@ $env:PIP_DISABLE_PIP_VERSION_CHECK = '1'
 $env:PYTHONPATH = (Join-Path $Root 'src')
 $env:PYINSTALLER_CONFIG_DIR = 'D:\Temp\ecu-release-task8\pyinstaller-cache'
 $env:PIP_CACHE_DIR = 'D:\software\pip-cache\ecu-release-tool'
-$PythonVersion = & $PythonPath -c 'import platform; print(platform.python_version())'
+$ReleaseVenv = 'D:\Temp\ecu-release-task8\release-venv'
+$SourceStageRoot = 'D:\Temp\ecu-release-task8\release-source'
+$LockFile = Join-Path $Root 'requirements-release.lock'
+$LockHash = (Get-FileHash -LiteralPath $LockFile -Algorithm SHA256).Hash.ToLowerInvariant()
+$Wheelhouse = "D:\software\EcuReleaseTool\wheelhouse\$LockHash"
+$PythonVersion = & $PythonPath -I -c 'import platform; print(platform.python_version())'
 if ($PythonVersion.Trim() -ne '3.11.9') {
     throw "Python version mismatch: expected 3.11.9, actual $PythonVersion"
+}
+if ($env:GITHUB_ACTIONS -ne 'true') {
+    $ActualPythonHash = (Get-FileHash -LiteralPath $PythonPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ActualPythonHash -ne $Contract.python.executableSha256) {
+        throw "python.exe SHA256 mismatch: expected $($Contract.python.executableSha256), actual $ActualPythonHash"
+    }
 }
 if (-not (Test-Path -LiteralPath $IsccPath -PathType Leaf)) {
     throw "Pinned Inno Setup not found: $IsccPath"
@@ -98,14 +109,11 @@ if ($ActualIsccHash -ne $Contract.innoSetup.isccSha256) {
 }
 
 if ($env:GITHUB_ACTIONS -eq 'true') {
-    if (-not $env:GITHUB_REPOSITORY -or -not $env:GITHUB_TOKEN) {
-        throw 'Official build requires GITHUB_REPOSITORY and GITHUB_TOKEN.'
+    if (-not $env:GITHUB_REPOSITORY -or -not $env:GITHUB_EVENT_PATH) {
+        throw 'Official build requires GITHUB_REPOSITORY and GITHUB_EVENT_PATH.'
     }
-    git -C $Root fetch --force --tags origin '+refs/heads/*:refs/remotes/origin/*'
-    $Headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
-    $RepositoryInfo = Invoke-RestMethod -Headers $Headers `
-        -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
-    $DefaultBranchRef = "refs/remotes/origin/$($RepositoryInfo.default_branch)"
+    $Event = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+    $DefaultBranchRef = "refs/remotes/origin/$($Event.repository.default_branch)"
     & $PythonPath (Join-Path $Root 'scripts\release_build.py') prepare-build `
         --repo $Root --output-dir $ReleaseBuild --default-branch-ref $DefaultBranchRef
 }
@@ -114,13 +122,40 @@ else {
         --repo $Root --output-dir $ReleaseBuild
 }
 
-& $PythonPath -m pip install --require-hashes -r (Join-Path $Root 'requirements-release.lock')
-& $PythonPath -m pip check
-& $PythonPath -m pip install --no-deps --no-build-isolation (Join-Path $Root '.')
-& $PythonPath -m pip check
+if (-not (Test-Path -LiteralPath $Wheelhouse -PathType Container)) {
+    throw "Pinned wheelhouse not found; run bootstrap_release_tools.ps1 first: $Wheelhouse"
+}
+foreach ($TemporaryDirectory in @($ReleaseVenv, $SourceStageRoot)) {
+    if (Test-Path -LiteralPath $TemporaryDirectory) {
+        $ResolvedTemporary = (Resolve-Path -LiteralPath $TemporaryDirectory).Path
+        if (-not $ResolvedTemporary.StartsWith('D:\Temp\ecu-release-task8\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to clear unexpected path: $ResolvedTemporary"
+        }
+        Remove-Item -LiteralPath $ResolvedTemporary -Recurse -Force
+    }
+}
+& $PythonPath -I -m venv $ReleaseVenv
+$ReleasePython = Join-Path $ReleaseVenv 'Scripts\python.exe'
+& $ReleasePython -I -m pip install --no-index --find-links $Wheelhouse `
+    --require-hashes -r $LockFile
+& $ReleasePython -I -m pip check
 
-& $PythonPath (Join-Path $Root 'scripts\release_build.py') fetch-usb2xxx `
-    --source-file $SourceContract --output-dir $UsbRuntime
+New-Item -ItemType Directory -Force -Path $SourceStageRoot | Out-Null
+$SourceArchive = Join-Path $SourceStageRoot 'source.zip'
+$SourceTree = Join-Path $SourceStageRoot 'source'
+git -C $Root archive --format=zip --output=$SourceArchive HEAD
+Expand-Archive -LiteralPath $SourceArchive -DestinationPath $SourceTree
+& $ReleasePython -I -m pip install --no-index --no-deps --no-build-isolation $SourceTree
+& $ReleasePython -I -m pip check
+$Version = (& $ReleasePython -I -c "import importlib.metadata as m; print(m.version('unified-can-lin-host-tool'))").Trim()
+& $PythonPath (Join-Path $Root 'scripts\release_build.py') audit-environment `
+    --python $ReleasePython --lock $LockFile `
+    --project-name unified-can-lin-host-tool --project-version $Version `
+    --output (Join-Path $ReleaseBuild 'release-environment-audit.json')
+Remove-Item -LiteralPath $SourceStageRoot -Recurse -Force
+
+& $ReleasePython (Join-Path $Root 'scripts\release_build.py') fetch-usb2xxx `
+    --source-file $SourceContract --output-dir $UsbRuntime --offline
 
 $Identity = Join-Path $ReleaseBuild '_tool_build_identity.json'
 $GuiVersion = Join-Path $ReleaseBuild 'EcuReleaseTool.version.txt'
@@ -128,12 +163,11 @@ $CliVersion = Join-Path $ReleaseBuild 'EcuReleaseCLI.version.txt'
 $PublicKeys = Join-Path $Root 'src\unified_can_lin_host_tool\update\release_public_keys.json'
 $UsbDll = Join-Path $UsbRuntime 'USB2XXX.dll'
 $LibusbDll = Join-Path $UsbRuntime 'libusb-1.0.dll'
-$Version = (& $PythonPath -c "import tomllib; print(tomllib.load(open(r'$($Root.Replace("'", "''"))\pyproject.toml','rb'))['project']['version'])").Trim()
 
 Remove-Item -LiteralPath $Dist, $Build, $InstallerDist -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Dist, $Build, $InstallerDist | Out-Null
 
-& $PythonPath -m PyInstaller --noconfirm --clean --onefile --windowed `
+& $ReleasePython -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name EcuReleaseTool --paths (Join-Path $Root 'src') `
     --version-file $GuiVersion `
     --add-data "$Identity;unified_can_lin_host_tool" `
@@ -141,7 +175,7 @@ New-Item -ItemType Directory -Force -Path $Dist, $Build, $InstallerDist | Out-Nu
     --copy-metadata unified-can-lin-host-tool `
     --distpath $Dist --workpath (Join-Path $Build 'gui') `
     --specpath $Build (Join-Path $Root 'src\unified_can_lin_host_tool\cli\ui.py')
-& $PythonPath -m PyInstaller --noconfirm --clean --onefile --console `
+& $ReleasePython -m PyInstaller --noconfirm --clean --onefile --console `
     --name EcuReleaseCLI --paths (Join-Path $Root 'src') `
     --version-file $CliVersion `
     --add-data "$Identity;unified_can_lin_host_tool" `
@@ -163,9 +197,11 @@ foreach ($Executable in @('EcuReleaseTool.exe', 'EcuReleaseCLI.exe')) {
 
 & $IsccPath "/DMyAppVersion=$Version" (Join-Path $Root 'installer\EcuReleaseTool.iss')
 $Installer = Join-Path $InstallerDist "EcuReleaseTool_Setup_$Version.exe"
-& $PythonPath (Join-Path $Root 'scripts\release_build.py') audit-build `
+& $ReleasePython (Join-Path $Root 'scripts\release_build.py') audit-build `
     --dist-dir $Dist --installer $Installer --identity $Identity `
     --output (Join-Path $Root 'dist\release-audit.json')
+
+Remove-Item -LiteralPath $ReleaseVenv -Recurse -Force
 
 Get-Item -LiteralPath (Join-Path $Dist 'EcuReleaseTool.exe'), `
     (Join-Path $Dist 'EcuReleaseCLI.exe'), $Installer, `
