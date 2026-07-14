@@ -1,0 +1,15 @@
+{
+  "repository": "https://gitee.com/toomoss/usb2can_lin_pwm_example.git",
+  "commit": "d1fd307a72cad0c71aa81db79ab413b8e7a26175",
+  "runtimePath": "sdk/libs/windows/x86_64",
+  "files": {
+    "USB2XXX.dll": {
+      "size": 538112,
+      "sha256": "7857f3c43b5f5f41414da0ce04f2914d45af805a7ad0e14a0aa84b6a16a42d1b"
+    },
+    "libusb-1.0.dll": {
+      "size": 157696,
+      "sha256": "a8c91f0ff68fb7802a9f4416728f0eeb4d99af4ceaa4ef7dfe9374e76e375018"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+THIRD-PARTY NOTICES
+===================
+
+USB2XXX Windows x64 runtime
+---------------------------
+Source repository: https://gitee.com/toomoss/usb2can_lin_pwm_example.git
+Source commit: d1fd307a72cad0c71aa81db79ab413b8e7a26175
+
+USB2XXX.dll
+  SHA-256: 7857f3c43b5f5f41414da0ce04f2914d45af805a7ad0e14a0aa84b6a16a42d1b
+libusb-1.0.dll
+  SHA-256: a8c91f0ff68fb7802a9f4416728f0eeb4d99af4ceaa4ef7dfe9374e76e375018
+
+Copyright remains with the respective rights holders. No explicit
+redistribution license was found in the pinned upstream repository. Public
+redistribution therefore requires an explicit project-owner decision that
+accepts this licensing risk. This notice records provenance and integrity; it
+does not grant redistribution rights.
+
+TSMaster vendor DLLs are not included in this distribution.

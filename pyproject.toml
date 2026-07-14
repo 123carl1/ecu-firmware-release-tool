@@ -1,12 +1,12 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools==82.0.1", "wheel==0.47.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "unified-can-lin-host-tool"
 version = "0.2.0"
 requires-python = ">=3.11"
-dependencies = ["PyYAML>=6.0", "cryptography>=42,<46"]
+dependencies = ["PyYAML>=6.0", "cryptography>=46,<47"]
 
 [project.scripts]
 ecu-release = "unified_can_lin_host_tool.cli.release:main"

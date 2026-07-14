@@ -1,5 +1,4 @@
 import struct
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,6 +13,45 @@ from unified_can_lin_host_tool.release.package import ResourceKind
 
 
 STRUCT = struct.Struct("<4sHHIHH32s32s20s")
+
+
+def write_identity_fixture(tmp_path: Path, identity: bytes) -> tuple[Path, Path]:
+    assert len(identity) == 100
+    elf_header = struct.Struct("<16sHHIIIIIHHHHHH")
+    program_header = struct.Struct("<IIIIIIII")
+    section_header = struct.Struct("<IIIIIIIIII")
+    names = b"\0.shstrtab\0.fw_identity\0.text\0"
+    identity_name = names.index(b".fw_identity")
+    text_name = names.index(b".text")
+    shstr_name = names.index(b".shstrtab")
+    phoff, data_offset, names_offset, shoff = elf_header.size, 0x100, 0x180, 0x200
+    image = bytearray(shoff + 4 * section_header.size)
+    ident = b"\x7fELF" + bytes([1, 1, 1]) + b"\0" * 9
+    elf_header.pack_into(
+        image, 0, ident, 2, 40, 1, 0x1064, phoff, shoff, 0,
+        elf_header.size, program_header.size, 1, section_header.size, 4, 1,
+    )
+    program_header.pack_into(
+        image, phoff, 1, data_offset, 0x1000, 0x1000, 101, 101, 5, 4,
+    )
+    image[data_offset:data_offset + 100] = identity
+    image[data_offset + 100] = 0
+    image[names_offset:names_offset + len(names)] = names
+    sections = [
+        (0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        (shstr_name, 3, 0, 0, names_offset, len(names), 0, 0, 1, 0),
+        (identity_name, 1, 2, 0x1000, data_offset, 100, 0, 0, 4, 0),
+        (text_name, 1, 6, 0x1064, data_offset + 100, 1, 0, 0, 1, 0),
+    ]
+    for index, values in enumerate(sections):
+        section_header.pack_into(image, shoff + index * section_header.size, *values)
+    elf_path = tmp_path / "identity.elf"
+    bin_path = tmp_path / "identity.bin"
+    elf_path.write_bytes(image)
+    bin_path.write_bytes(identity + b"\0")
+    assert len(image) == shoff + 4 * section_header.size
+    assert bin_path.read_bytes()[:100] == identity
+    return elf_path, bin_path
 
 
 def _raw(kind: ResourceKind, *, build_id: bytes = b"B" * 32) -> bytes:
@@ -61,42 +99,17 @@ def test_release_build_rejects_mixed_build_ids() -> None:
 
 def test_reads_allocated_identity_section_and_matches_bin(tmp_path: Path) -> None:
     identity = _raw(ResourceKind.APP)
-    source = tmp_path / "identity.S"
-    linker = tmp_path / "identity.ld"
-    elf = tmp_path / "identity.elf"
-    binary = tmp_path / "identity.bin"
-    source.write_text(
-        '.section .fw_identity,"a",%progbits\n.global fw_identity\n'
-        'fw_identity:\n.incbin "identity.raw"\n'
-        '.section .text,"ax"\n.global _start\n_start:\n nop\n',
-        encoding="ascii",
-    )
-    (tmp_path / "identity.raw").write_bytes(identity)
-    linker.write_text(
-        "SECTIONS { . = 0x1000; .fw_identity : { *(.fw_identity) } "
-        ".text : { *(.text) } }\n",
-        encoding="ascii",
-    )
-    subprocess.run(
-        ["arm-none-eabi-gcc", "-nostdlib", "-Wl,-T," + str(linker), str(source), "-o", str(elf)],
-        cwd=tmp_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["arm-none-eabi-objcopy", "-O", "binary", str(elf), str(binary)],
-        check=True,
-        capture_output=True,
-    )
+    elf, binary = write_identity_fixture(tmp_path, identity)
 
     assert read_build_identity(elf, binary) == decode_build_identity(identity)
 
 
 def test_rejects_bin_that_differs_from_elf_identity(tmp_path: Path) -> None:
-    elf = tmp_path / "missing.elf"
-    binary = tmp_path / "image.bin"
-    elf.write_bytes(b"not-elf")
-    binary.write_bytes(_raw(ResourceKind.BOOT))
+    identity = _raw(ResourceKind.BOOT)
+    elf, binary = write_identity_fixture(tmp_path, identity)
+    damaged = bytearray(binary.read_bytes())
+    damaged[10] ^= 1
+    binary.write_bytes(damaged)
 
-    with pytest.raises(ValueError, match="ELF"):
+    with pytest.raises(ValueError, match="differ"):
         read_build_identity(elf, binary)

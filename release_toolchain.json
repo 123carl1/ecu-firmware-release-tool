@@ -1,0 +1,23 @@
+{
+  "python": {
+    "version": "3.11.9",
+    "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe",
+    "size": 26216840,
+    "sha256": "5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde",
+    "installDir": "D:\\software\\Python311"
+  },
+  "innoSetup": {
+    "version": "6.7.3",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe",
+    "size": 10592232,
+    "sha256": "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732",
+    "isccSha256": "0a8757031b33777e4c9cbffee40f11a5062b36d25cbe144c1db73b6102b80ad7",
+    "installDir": "D:\\software\\InnoSetup\\6.7.3"
+  },
+  "gitleaks": {
+    "version": "8.30.1",
+    "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_x64.zip",
+    "sha256": "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e",
+    "installDir": "D:\\software\\gitleaks\\8.30.1"
+  }
+}

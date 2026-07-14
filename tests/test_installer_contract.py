@@ -16,6 +16,7 @@ def test_installer_requires_build_supplied_version():
     assert '#define MyAppVersion "0.1.0"' not in text
     assert "ignoreversion" not in text
     assert "VersionInfoVersion={#MyAppVersion}.0" in text
+    assert "OutputBaseFilename=EcuReleaseTool_Setup_{#MyAppVersion}" in text
 
 
 def test_setup_disables_automatic_process_termination_and_restart():
