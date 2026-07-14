@@ -2,6 +2,8 @@ import base64
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path("installer/check_running_processes.ps1").resolve()
 
@@ -40,6 +42,39 @@ $result.Message
 exit $result.ExitCode
 """
     return _run_powershell(command)
+
+
+def _invoke_version_policy(
+    candidate: str,
+    installed: str,
+    source: str,
+    *,
+    auto_update: bool = False,
+):
+    arguments = [
+        "pwsh.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        str(SCRIPT),
+        "-CandidateVersion",
+        candidate,
+        "-InstalledVersion",
+        installed,
+        "-InstalledVersionSource",
+        source,
+    ]
+    if auto_update:
+        arguments.append("-AutoUpdate")
+    return subprocess.run(
+        arguments,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+    )
 
 
 def test_process_inside_install_directory_returns_10():
@@ -119,3 +154,54 @@ def test_script_never_terminates_processes():
     text = SCRIPT.read_text(encoding="utf-8")
 
     assert "Stop-Process" not in text
+
+
+@pytest.mark.parametrize(
+    ("candidate", "installed", "source", "auto_update", "expected_exit"),
+    [
+        ("0.2.0", "0.1.0", "Registry", False, 0),
+        ("0.2.0", "0.3.0", "Registry", False, 13),
+        ("0.2.0", "0.2.0", "Registry", True, 14),
+        ("0.2.0", "0.2.0", "Registry", False, 0),
+        ("1.2.4", "1.2.3", "Registry", False, 0),
+        ("1.2.4", "1.2.3.0", "PeFile", False, 0),
+    ],
+)
+def test_version_policy_acceptance_matrix(
+    candidate: str,
+    installed: str,
+    source: str,
+    auto_update: bool,
+    expected_exit: int,
+):
+    result = _invoke_version_policy(
+        candidate,
+        installed,
+        source,
+        auto_update=auto_update,
+    )
+
+    assert result.returncode == expected_exit, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("candidate", "installed", "source"),
+    [
+        ("0.2.0", "01.2.3", "Registry"),
+        ("0.2.0", "-1.2.3", "Registry"),
+        ("0.2.0", "65536.2.3", "Registry"),
+        ("01.2.3", "0.2.0", "Registry"),
+        ("0.2.0", "1.2.3.1", "PeFile"),
+        ("0.2.0", "1.2.3.65535", "PeFile"),
+        ("0.2.0", "1.2.3", "PeFile"),
+        ("0.2.0", "1.2.3.0", "Registry"),
+    ],
+)
+def test_version_policy_rejects_noncanonical_versions(
+    candidate: str,
+    installed: str,
+    source: str,
+):
+    result = _invoke_version_policy(candidate, installed, source)
+
+    assert result.returncode == 12, result.stderr

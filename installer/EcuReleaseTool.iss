@@ -198,98 +198,66 @@ begin
     Result := ResultCode;
 end;
 
-function ReadVersionPart(var Remaining: String; var Value: Integer): Boolean;
+function RunVersionPolicy(const CandidateVersion, InstalledVersion,
+  InstalledVersionSource: String; IsAutomatic: Boolean): Integer;
 var
-  SeparatorPosition: Integer;
-  Part: String;
+  ScriptPath: String;
+  Params: String;
+  ResultCode: Integer;
 begin
-  Result := False;
-  if Remaining = '' then
-    Exit;
-  SeparatorPosition := Pos('.', Remaining);
-  if SeparatorPosition = 0 then
-  begin
-    Part := Remaining;
-    Remaining := '';
-  end
-  else
-  begin
-    Part := Copy(Remaining, 1, SeparatorPosition - 1);
-    Delete(Remaining, 1, SeparatorPosition);
-  end;
-  Value := StrToIntDef(Part, -1);
-  Result := (Value >= 0) and (Value <= 65535);
-end;
-
-function TryParseVersion(const VersionText: String; var MajorVersion,
-  MinorVersion, PatchVersion: Integer): Boolean;
-var
-  Remaining: String;
-  BuildVersion: Integer;
-begin
-  Remaining := VersionText;
-  Result := ReadVersionPart(Remaining, MajorVersion) and
-    ReadVersionPart(Remaining, MinorVersion) and
-    ReadVersionPart(Remaining, PatchVersion);
-  if not Result then
-    Exit;
-  if Remaining <> '' then
-    Result := ReadVersionPart(Remaining, BuildVersion) and (Remaining = '');
-end;
-
-function CompareVersions(const LeftVersion, RightVersion: String; var Valid: Boolean): Integer;
-var
-  LeftMajor: Integer;
-  LeftMinor: Integer;
-  LeftPatch: Integer;
-  RightMajor: Integer;
-  RightMinor: Integer;
-  RightPatch: Integer;
-begin
-  Result := 0;
-  Valid := TryParseVersion(LeftVersion, LeftMajor, LeftMinor, LeftPatch) and
-    TryParseVersion(RightVersion, RightMajor, RightMinor, RightPatch);
-  if not Valid then
+  Result := 12;
+  ScriptPath := ExpandConstant('{tmp}\check_running_processes.ps1');
+  if not FileExists(ScriptPath) then
+    ExtractTemporaryFile('check_running_processes.ps1');
+  if not FileExists(ScriptPath) then
     Exit;
 
-  if LeftMajor <> RightMajor then
-    Result := LeftMajor - RightMajor
-  else if LeftMinor <> RightMinor then
-    Result := LeftMinor - RightMinor
-  else
-    Result := LeftPatch - RightPatch;
+  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' +
+    AddQuotes(ScriptPath) + ' -CandidateVersion ' + AddQuotes(CandidateVersion) +
+    ' -InstalledVersion ' + AddQuotes(InstalledVersion) +
+    ' -InstalledVersionSource ' + AddQuotes(InstalledVersionSource);
+  if IsAutomatic then
+    Params := Params + ' -AutoUpdate';
+
+  if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Result := ResultCode;
 end;
 
-function ReadInstalledVersion(var InstalledVersion: String): Boolean;
+function ReadInstalledVersion(var InstalledVersion,
+  InstalledVersionSource: String): Boolean;
 begin
   Result := RegQueryStringValue(HKCU, UninstallRegistryKey,
     'DisplayVersion', InstalledVersion);
   if not Result then
+  begin
     Result := GetVersionNumbersString(ExpandConstant('{app}\EcuReleaseTool.exe'),
       InstalledVersion);
+    if Result then
+      InstalledVersionSource := 'PeFile';
+  end
+  else
+    InstalledVersionSource := 'Registry';
 end;
 
 function CheckInstalledVersion: String;
 var
   InstalledVersion: String;
-  CompareResult: Integer;
-  Valid: Boolean;
+  InstalledVersionSource: String;
+  PolicyResult: Integer;
 begin
   Result := '';
-  if not ReadInstalledVersion(InstalledVersion) then
+  if not ReadInstalledVersion(InstalledVersion, InstalledVersionSource) then
     Exit;
 
-  CompareResult := CompareVersions(InstalledVersion, '{#MyAppVersion}', Valid);
-  if not Valid then
-  begin
-    Result := '无法解析已安装版本，已取消覆盖安装。';
-    Exit;
-  end;
-
-  if CompareResult > 0 then
+  PolicyResult := RunVersionPolicy('{#MyAppVersion}', InstalledVersion,
+    InstalledVersionSource, AutoUpdateMode);
+  if PolicyResult = 13 then
     Result := '已安装版本高于当前安装包，不允许降级安装。'
-  else if (CompareResult = 0) and AutoUpdateMode then
-    Result := '自动更新不允许重复安装相同版本。';
+  else if PolicyResult = 14 then
+    Result := '自动更新不允许重复安装相同版本。'
+  else if PolicyResult <> 0 then
+    Result := '无法解析安装包版本或已安装版本，已取消覆盖安装。';
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

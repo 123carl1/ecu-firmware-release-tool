@@ -61,7 +61,8 @@ def test_auto_update_arguments_are_strictly_validated():
 def test_installed_version_policy_rejects_downgrade_and_auto_reinstall():
     text = _installer_text()
 
-    assert "CompareVersions" in text
+    assert "RunVersionPolicy" in text
+    assert "InstalledVersionSource" in text
     assert "不允许降级安装" in text
     assert "自动更新不允许重复安装相同版本" in text
 
