@@ -1,4 +1,5 @@
 import base64
+import os
 import subprocess
 from pathlib import Path
 
@@ -154,6 +155,31 @@ def test_script_never_terminates_processes():
     text = SCRIPT.read_text(encoding="utf-8")
 
     assert "Stop-Process" not in text
+
+
+def test_script_runs_under_windows_powershell_51(tmp_path):
+    powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    result = subprocess.run(
+        [
+            str(powershell),
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(SCRIPT),
+            "-InstallDir",
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="ascii",
+        errors="replace",
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(

@@ -44,12 +44,12 @@ function Test-EcuReleaseProcessPath {
     try {
         $normalizedInstallDir = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/')
         if ([string]::IsNullOrWhiteSpace($normalizedInstallDir)) {
-            throw '安装目录为空。'
+            throw 'Install directory is empty.'
         }
         $installPrefix = $normalizedInstallDir + [System.IO.Path]::DirectorySeparatorChar
     }
     catch {
-        return New-ProcessGuardResult -ExitCode 11 -Message "无法规范化安装目录：$($_.Exception.Message)"
+        return New-ProcessGuardResult -ExitCode 11 -Message "Cannot normalize install directory: $($_.Exception.Message)"
     }
 
     foreach ($process in $ProcessRecords) {
@@ -66,23 +66,23 @@ function Test-EcuReleaseProcessPath {
         try {
             $processPath = [string]$process.Path
             if ([string]::IsNullOrWhiteSpace($processPath)) {
-                throw '进程路径为空。'
+                throw 'Process path is empty.'
             }
             $normalizedProcessPath = [System.IO.Path]::GetFullPath($processPath)
         }
         catch {
-            return New-ProcessGuardResult -ExitCode 11 -Message "无法查询进程 PID=$processId 的可执行文件路径：$($_.Exception.Message)"
+            return New-ProcessGuardResult -ExitCode 11 -Message "Cannot query executable path for PID=${processId}: $($_.Exception.Message)"
         }
 
         if ($normalizedProcessPath.StartsWith(
                 $installPrefix,
                 [System.StringComparison]::OrdinalIgnoreCase)) {
             $fileName = [System.IO.Path]::GetFileName($normalizedProcessPath)
-            return New-ProcessGuardResult -ExitCode 10 -Message "安装目录内仍有进程运行：PID=$processId，文件=$fileName"
+            return New-ProcessGuardResult -ExitCode 10 -Message "A process is still running in the install directory: PID=$processId, file=$fileName"
         }
     }
 
-    return New-ProcessGuardResult -ExitCode 0 -Message '未发现安装目录内运行中的 ECU 发布工具进程。'
+    return New-ProcessGuardResult -ExitCode 0 -Message 'No ECU release tool process is running in the install directory.'
 }
 
 function ConvertTo-EcuReleaseVersionComponents {
@@ -144,7 +144,7 @@ function Test-EcuReleaseVersionPolicy {
         -Version $InstalledVersion `
         -Source $InstalledVersionSource
     if (($null -eq $candidate) -or ($null -eq $installed)) {
-        return New-ProcessGuardResult -ExitCode 12 -Message '安装包版本或已安装版本格式无效。'
+        return New-ProcessGuardResult -ExitCode 12 -Message 'The candidate or installed version format is invalid.'
     }
 
     $comparison = 0
@@ -159,13 +159,13 @@ function Test-EcuReleaseVersionPolicy {
     }
 
     if ($comparison -gt 0) {
-        return New-ProcessGuardResult -ExitCode 13 -Message '已安装版本高于当前安装包。'
+        return New-ProcessGuardResult -ExitCode 13 -Message 'The installed version is newer than the candidate.'
     }
     if (($comparison -eq 0) -and $AutoUpdate) {
-        return New-ProcessGuardResult -ExitCode 14 -Message '自动更新不允许重复安装相同版本。'
+        return New-ProcessGuardResult -ExitCode 14 -Message 'Automatic update does not reinstall the same version.'
     }
 
-    return New-ProcessGuardResult -ExitCode 0 -Message '允许安装。'
+    return New-ProcessGuardResult -ExitCode 0 -Message 'Installation is allowed.'
 }
 
 function Invoke-EcuReleaseProcessGuard {
@@ -196,7 +196,7 @@ function Invoke-EcuReleaseProcessGuard {
         )
     }
     catch {
-        return New-ProcessGuardResult -ExitCode 11 -Message "无法枚举 ECU 发布工具进程：$($_.Exception.Message)"
+        return New-ProcessGuardResult -ExitCode 11 -Message "Cannot enumerate ECU release tool processes: $($_.Exception.Message)"
     }
 
     return Test-EcuReleaseProcessPath `
@@ -208,7 +208,7 @@ function Invoke-EcuReleaseProcessGuard {
 if ($MyInvocation.InvocationName -ne '.') {
     if (-not [string]::IsNullOrWhiteSpace($CandidateVersion)) {
         if ([string]::IsNullOrWhiteSpace($InstalledVersion)) {
-            Write-Output '缺少 -InstalledVersion 参数。'
+            Write-Output 'Missing -InstalledVersion argument.'
             exit 12
         }
         $guardResult = Test-EcuReleaseVersionPolicy `
@@ -219,7 +219,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
     else {
         if ([string]::IsNullOrWhiteSpace($InstallDir)) {
-            Write-Output '缺少 -InstallDir 参数。'
+            Write-Output 'Missing -InstallDir argument.'
             exit 11
         }
 
