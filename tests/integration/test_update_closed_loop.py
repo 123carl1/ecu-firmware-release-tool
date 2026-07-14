@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -25,6 +26,8 @@ from unified_can_lin_host_tool.update.errors import (
     UpdateSecurityError,
 )
 from unified_can_lin_host_tool.update.github_release import GitHubReleaseSource
+from unified_can_lin_host_tool.update import runtime_mutex
+from unified_can_lin_host_tool.update import service as update_service_module
 from unified_can_lin_host_tool.update.runtime_mutex import (
     is_product_mutex_present,
     product_run_mutex,
@@ -201,6 +204,8 @@ def test_020_to_021_uses_paired_signature_atomic_cache_and_installer_arguments(
     stale.parent.mkdir(parents=True)
     stale.write_bytes(b"stale cache")
     observed_part_names: list[str] = []
+    replace_calls: list[tuple[Path, Path]] = []
+    real_replace = os.replace
 
     def observe_part_before_first_download_chunk() -> None:
         assert not stale.exists()
@@ -208,17 +213,36 @@ def test_020_to_021_uses_paired_signature_atomic_cache_and_installer_arguments(
         assert len(parts) == 1
         observed_part_names.append(parts[0].name)
 
+    def observe_and_replace(source, target) -> None:
+        source_path = Path(source)
+        target_path = Path(target)
+        assert source_path.suffix == ".part"
+        assert source_path.read_bytes() == release.installer
+        assert target_path == stale
+        assert not target_path.exists()
+        replace_calls.append((source_path, target_path))
+        real_replace(source_path, target_path)
+
     http.on_stream_start = observe_part_before_first_download_chunk
     service = _service("0.2.0", http, cache_root, public_keys)
 
     info = service.check()
     assert info is not None
     assert info.version == SemanticVersion.parse("0.2.1")
-    installer = service.download(info)
+    with patch.object(
+        update_service_module.os,
+        "replace",
+        side_effect=observe_and_replace,
+    ) as replace_spy:
+        installer = service.download(info)
 
     assert installer == stale
     assert installer.read_bytes() == release.installer
     assert observed_part_names and not list(stale.parent.glob("*.part"))
+    assert replace_spy.call_count == 1
+    assert len(replace_calls) == 1
+    assert replace_calls[0][0].name == observed_part_names[0]
+    assert replace_calls[0][1] == installer
     assert all("latest/download/update.json.sig" not in call[1] for call in http.calls)
     assert installer_arguments(parent_pid=4321, log_path=tmp_path / "installer.log") == [
         "/SILENT",
@@ -322,13 +346,15 @@ def test_same_version_and_downgrade_are_not_offered(
 
 
 def test_multiple_runtime_mutex_handles_keep_product_marked_running():
-    assert is_product_mutex_present() is False
-    with product_run_mutex():
-        assert is_product_mutex_present() is True
+    test_mutex = rf"Local\EcuFirmwareReleaseTool.Test.{os.getpid()}.{uuid4().hex}"
+    with patch.object(runtime_mutex, "PRODUCT_RUN_MUTEX", test_mutex):
+        assert is_product_mutex_present() is False
         with product_run_mutex():
             assert is_product_mutex_present() is True
-        assert is_product_mutex_present() is True
-    assert is_product_mutex_present() is False
+            with product_run_mutex():
+                assert is_product_mutex_present() is True
+            assert is_product_mutex_present() is True
+        assert is_product_mutex_present() is False
 
 
 def test_installer_start_failure_unfreezes_tasks_and_keeps_gui_running(tmp_path: Path):
