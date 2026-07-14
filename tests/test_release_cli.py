@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from contextlib import contextmanager
 
 import json
 import pytest
@@ -39,6 +40,45 @@ def test_cli_version_reports_tool_version_and_short_commit(monkeypatch, capsys):
 
     assert exc_info.value.code == 0
     assert capsys.readouterr().out == "EcuReleaseCLI 0.2.0 (commit 0101010)\n"
+
+
+def test_cli_version_does_not_hold_product_mutex(monkeypatch):
+    entered = []
+
+    @contextmanager
+    def mutex():
+        entered.append(True)
+        yield
+
+    monkeypatch.setattr(release_cli, "product_run_mutex", mutex, raising=False)
+
+    with pytest.raises(SystemExit):
+        main(["--version"])
+
+    assert entered == []
+
+
+def test_scan_holds_product_mutex_for_business_execution(monkeypatch, capsys):
+    active = []
+
+    @contextmanager
+    def mutex():
+        active.append(True)
+        try:
+            yield
+        finally:
+            active.pop()
+
+    def probe(**_kwargs):
+        assert active == [True]
+        return []
+
+    monkeypatch.setattr(release_cli, "product_run_mutex", mutex, raising=False)
+    monkeypatch.setattr(release_cli.TsmasterAdapter, "probe_can_devices", probe)
+
+    assert main(["scan", "--project", "AS5PR"]) == 3
+    assert active == []
+    assert json.loads(capsys.readouterr().out)["event"] == "scan_result"
 
 
 def test_scan_lists_tsmaster_devices_as_machine_readable_event(monkeypatch, capsys):

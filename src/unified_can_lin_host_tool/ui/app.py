@@ -6,6 +6,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from unified_can_lin_host_tool.ui.release_workspace import ReleaseMainWindow
+from unified_can_lin_host_tool.update.runtime_mutex import product_run_mutex
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -16,12 +17,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    app = QApplication.instance() or QApplication(sys.argv[:1])
-    window = ReleaseMainWindow()
-    if args.smoke:
-        app.processEvents()
-        print("UI SMOKE OK")
-        return 0
+    with product_run_mutex():
+        app = QApplication.instance() or QApplication(sys.argv[:1])
+        window = ReleaseMainWindow()
+        if args.smoke:
+            app.processEvents()
+            print("UI SMOKE OK")
+            return 0
 
-    window.show()
-    return app.exec()
+        window.show()
+        return app.exec()

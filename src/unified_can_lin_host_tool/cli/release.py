@@ -19,6 +19,7 @@ from unified_can_lin_host_tool.release.runtime_ota import prepare_as5pr_app
 from unified_can_lin_host_tool.tool_identity import get_tool_identity
 from unified_can_lin_host_tool.trace import TraceLogger, default_log_dir
 from unified_can_lin_host_tool.transport.can_isotp import CanIsoTpTransport
+from unified_can_lin_host_tool.update.runtime_mutex import product_run_mutex
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -189,6 +190,11 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
     args = build_parser().parse_args(argv)
+    with product_run_mutex():
+        return _run_business_command(args)
+
+
+def _run_business_command(args) -> int:
     adapter = None
     trace = None
     try:
