@@ -15,11 +15,22 @@ from scripts.release_build import (
     validate_distribution_inventory,
     validate_pyinstaller_archive,
     fetch_usb2xxx_runtime,
+    is_official_release_environment,
     prepare_build,
     read_project_version,
     validate_release_git_state,
     write_tool_identity,
 )
+
+
+def test_only_tag_actions_build_is_an_official_release():
+    assert not is_official_release_environment({})
+    assert not is_official_release_environment(
+        {"GITHUB_ACTIONS": "true", "GITHUB_REF_TYPE": "branch"}
+    )
+    assert is_official_release_environment(
+        {"GITHUB_ACTIONS": "true", "GITHUB_REF_TYPE": "tag"}
+    )
 
 
 def _git(repo: Path, *args: str) -> str:

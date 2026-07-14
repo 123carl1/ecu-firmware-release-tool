@@ -33,6 +33,13 @@ class BuildOutputs:
     cli_version: Path
 
 
+def is_official_release_environment(environment: Mapping[str, str]) -> bool:
+    return (
+        environment.get("GITHUB_ACTIONS") == "true"
+        and environment.get("GITHUB_REF_TYPE") == "tag"
+    )
+
+
 def _run(*args: str, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(args), cwd=cwd, check=check, capture_output=True, text=True,
@@ -565,7 +572,7 @@ def main(argv: list[str] | None = None) -> int:
     repo = args.repo.resolve()
     version = str(read_project_version(repo / "pyproject.toml"))
     commit = _run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
-    official = os.environ.get("GITHUB_ACTIONS") == "true"
+    official = is_official_release_environment(os.environ)
     if official:
         repository = os.environ.get("GITHUB_REPOSITORY", "")
         sha = os.environ.get("GITHUB_SHA", "")
