@@ -14,3 +14,6 @@ ecu-release-gui = "unified_can_lin_host_tool.ui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"unified_can_lin_host_tool.update" = ["release_public_keys.json"]
