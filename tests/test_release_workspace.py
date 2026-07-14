@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
 try:
+    from PySide6.QtCore import QProcess
     from PySide6.QtWidgets import QApplication
     from PySide6.QtWidgets import QMessageBox
 except ModuleNotFoundError:
@@ -17,6 +19,57 @@ from unified_can_lin_host_tool.ui.release_workspace import (
 )
 from unified_can_lin_host_tool.ui import release_workspace
 from unified_can_lin_host_tool.tool_identity import ToolIdentity
+from unified_can_lin_host_tool.update.metadata import InstallerAsset, UpdateInfo
+from unified_can_lin_host_tool.versioning import SemanticVersion
+
+
+def update_info(version="0.2.1", *, size=1024):
+    return UpdateInfo(
+        repository="owner/ecu-firmware-release-tool",
+        version=SemanticVersion.parse(version),
+        tag=f"v{version}",
+        commit="02" * 20,
+        generated_at="2026-07-14T12:00:00Z",
+        channel="stable",
+        release_notes="修复更新流程并提升稳定性",
+        installer=InstallerAsset(
+            f"EcuReleaseTool_Setup_{version}.exe", size, "03" * 32
+        ),
+        verified_key_id="release-2026",
+    )
+
+
+class FakeUpdateService:
+    def __init__(self, info=None, installer=None):
+        self.info = info
+        self.installer = installer
+        self.check_calls = 0
+        self.download_calls = 0
+
+    def check(self):
+        self.check_calls += 1
+        return self.info
+
+    def download(self, info, *, progress=None, cancelled=lambda: False):
+        self.download_calls += 1
+        if progress is not None:
+            progress(info.installer.size, info.installer.size)
+        if cancelled():
+            raise RuntimeError("安装包下载已取消")
+        return self.installer
+
+
+class BlockingCancelledUpdateService(FakeUpdateService):
+    def __init__(self, info):
+        super().__init__(info, Path("setup.exe"))
+        self.started = threading.Event()
+
+    def download(self, info, *, progress=None, cancelled=lambda: False):
+        self.download_calls += 1
+        self.started.set()
+        while not cancelled():
+            threading.Event().wait(0.005)
+        raise RuntimeError("安装包下载已取消")
 
 
 class ReleaseWorkspaceTests(unittest.TestCase):
@@ -33,6 +86,190 @@ class ReleaseWorkspaceTests(unittest.TestCase):
         try:
             self.assertEqual(window.windowTitle(), "ECU Firmware Release Tool 0.2.0")
             self.assertIn("版本 0.2.0，提交 0101010", window.log.toPlainText())
+        finally:
+            window.close()
+
+    def test_development_build_explains_that_official_updates_are_disabled(self):
+        identity = ToolIdentity("0.2.0", "development", "", "", False)
+        with patch.object(release_workspace, "get_tool_identity", return_value=identity):
+            window = ReleaseMainWindow()
+        try:
+            self.assertIn("开发构建，不自动检查正式更新", window.log.toPlainText())
+            with patch.object(QMessageBox, "about") as about:
+                window._show_about()
+            details = about.call_args.args[2]
+            self.assertIn("完整提交：development", details)
+            self.assertIn("固化仓库：未固化（开发构建）", details)
+            self.assertIn("开发构建，不自动检查正式更新", details)
+        finally:
+            window.close()
+
+    def test_non_official_or_repository_missing_identity_never_auto_checks_network(self):
+        identities = (
+            ToolIdentity("0.2.0", "development", "", "", False),
+            ToolIdentity("0.2.0", "01" * 20, "2026-07-14T12:00:00Z", "", True),
+        )
+        for identity in identities:
+            with self.subTest(identity=identity), patch.object(
+                release_workspace, "get_tool_identity", return_value=identity
+            ):
+                service = FakeUpdateService(update_info())
+                window = ReleaseMainWindow(update_service=service)
+                try:
+                    window.show()
+                    self.app.processEvents()
+                    self.app.processEvents()
+                    self.assertEqual(service.check_calls, 0)
+                    self.assertIn(
+                        "开发构建，不自动检查正式更新", window.log.toPlainText()
+                    )
+                finally:
+                    window.close()
+
+    def test_help_menu_exposes_manual_update_check_and_about(self):
+        window = ReleaseMainWindow(auto_check=False)
+        try:
+            self.assertEqual(window.check_update_action.text(), "检查更新")
+            self.assertEqual(window.about_action.text(), "关于")
+        finally:
+            window.close()
+
+    def test_auto_check_runs_once_after_first_show_and_manual_check_can_repeat(self):
+        service = FakeUpdateService()
+        identity = ToolIdentity(
+            "0.2.0", "01" * 20, "2026-07-14T12:00:00Z",
+            "owner/ecu-firmware-release-tool", True,
+        )
+        with patch.object(release_workspace, "get_tool_identity", return_value=identity):
+            window = ReleaseMainWindow(update_service=service)
+        try:
+            window.show()
+            self.app.processEvents()
+            self.app.processEvents()
+            self.assertTrue(self._wait_until(lambda: service.check_calls == 1))
+
+            window.hide()
+            window.show()
+            self.app.processEvents()
+            self.app.processEvents()
+            self.assertEqual(service.check_calls, 1)
+
+            window.check_update_action.trigger()
+            self.assertTrue(self._wait_until(lambda: service.check_calls == 2))
+            self.assertTrue(self._wait_until(lambda: window._update_thread is None))
+        finally:
+            window.close()
+
+    def test_available_update_prompt_contains_version_notes_and_size(self):
+        info = update_info(size=1536)
+        window = ReleaseMainWindow(auto_check=False)
+        try:
+            with patch.object(window, "_prompt_update", return_value=False) as prompt:
+                window._handle_update_check_result(info)
+            message = prompt.call_args.args[0]
+            self.assertIn("当前版本：0.2.0", message)
+            self.assertIn("目标版本：0.2.1", message)
+            self.assertIn("修复更新流程并提升稳定性", message)
+            self.assertIn("1.5 KiB", message)
+        finally:
+            window.close()
+
+    def test_later_reminder_suppresses_followup_prompt_for_this_process(self):
+        info = update_info()
+        window = ReleaseMainWindow(auto_check=False)
+        try:
+            with patch.object(window, "_prompt_update", return_value=False) as prompt:
+                window._handle_update_check_result(info)
+                window._handle_update_check_result(info)
+            prompt.assert_called_once()
+            self.assertIn("本次运行已稍后提醒", window.status_label.text())
+        finally:
+            window.close()
+
+    def test_immediate_update_is_disabled_while_scan_or_ota_process_exists(self):
+        window = ReleaseMainWindow(auto_check=False)
+        try:
+            window._process = object()
+            self.assertFalse(window._can_start_update_install())
+            window._process = None
+            window._update_thread = object()
+            self.assertFalse(window._can_start_update_install())
+        finally:
+            window._process = None
+            window._update_thread = None
+            window.close()
+
+    def test_update_error_uses_update_category_not_device_or_ota_category(self):
+        window = ReleaseMainWindow(auto_check=False)
+        try:
+            window._handle_update_failure("检查", "network down")
+            self.assertEqual(window.status_label.text(), "更新检查失败：network down")
+            self.assertNotIn("设备扫描", window.status_label.text())
+            self.assertNotIn("OTA", window.status_label.text())
+        finally:
+            window.close()
+
+    def test_download_can_be_cancelled_and_reports_update_category(self):
+        service = BlockingCancelledUpdateService(update_info())
+        window = ReleaseMainWindow(update_service=service, auto_check=False)
+        try:
+            window._download_update(service.info)
+            self.assertTrue(service.started.wait(1))
+            window._cancel_update_download()
+            self.assertTrue(self._wait_until(lambda: window._update_thread is None))
+            self.assertIn("更新下载已取消", window.status_label.text())
+            self.assertNotIn("设备扫描", window.status_label.text())
+            self.assertNotIn("OTA", window.status_label.text())
+        finally:
+            window.close()
+
+    def test_download_completion_does_not_install_if_scan_started(self):
+        installer = Path(r"D:\Temp\update-test\setup.exe")
+        service = FakeUpdateService(update_info(), installer)
+        window = ReleaseMainWindow(update_service=service, auto_check=False)
+        try:
+            window._process = object()
+            with patch.object(window, "_launch_verified_installer") as launch:
+                window._handle_download_result(installer)
+            launch.assert_not_called()
+            self.assertIn("已缓存", window.status_label.text())
+        finally:
+            window._process = None
+            window.close()
+
+    def test_installer_launch_success_freezes_tasks_and_quits(self):
+        window = ReleaseMainWindow(auto_check=False)
+        try:
+            with patch.object(
+                QProcess, "startDetached", return_value=(True, 1234)
+            ) as start, patch.object(
+                QApplication.instance(), "quit"
+            ) as quit_app, patch.object(release_workspace.os, "getpid", return_value=4321):
+                window._launch_verified_installer(Path("setup.exe"))
+
+            self.assertFalse(window.scan_button.isEnabled())
+            self.assertFalse(window.project_combo.isEnabled())
+            start.assert_called_once()
+            self.assertEqual(start.call_args.args[0], "setup.exe")
+            self.assertIn("/PARENT_PID=4321", start.call_args.args[1])
+            self.assertIn("/AUTO_UPDATE", start.call_args.args[1])
+            quit_app.assert_called_once()
+        finally:
+            window._update_exit_requested = False
+            window.close()
+
+    def test_installer_launch_failure_unfreezes_without_closing(self):
+        window = ReleaseMainWindow(auto_check=False)
+        try:
+            with patch.object(
+                QProcess, "startDetached", return_value=(False, 0)
+            ), patch.object(QApplication.instance(), "quit") as quit_app:
+                window._launch_verified_installer(Path("setup.exe"))
+
+            self.assertTrue(window.scan_button.isEnabled())
+            self.assertTrue(window.project_combo.isEnabled())
+            self.assertIn("更新安装器启动失败", window.status_label.text())
+            quit_app.assert_not_called()
         finally:
             window.close()
 
@@ -240,3 +477,12 @@ class ReleaseWorkspaceTests(unittest.TestCase):
 
         self.assertEqual(program, sys.executable)
         self.assertEqual(arguments[:2], ["-m", "unified_can_lin_host_tool.cli.release"])
+
+    @classmethod
+    def _wait_until(cls, condition, attempts=100):
+        for _ in range(attempts):
+            cls.app.processEvents()
+            if condition():
+                return True
+            threading.Event().wait(0.005)
+        return condition()

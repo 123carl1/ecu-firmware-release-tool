@@ -10,6 +10,25 @@ from unified_can_lin_host_tool.ui import app as ui_app
 
 
 class UiSmokeTest(unittest.TestCase):
+    def test_default_update_service_is_built_only_for_official_identity(self):
+        development = ui_app.ToolIdentity("0.2.0", "development", "", "", False)
+        self.assertIsNone(ui_app.build_default_update_service(development))
+        repository_missing = ui_app.ToolIdentity(
+            "0.2.0", "01" * 20, "2026-07-14T12:00:00Z", "", True
+        )
+        self.assertIsNone(ui_app.build_default_update_service(repository_missing))
+
+        official = ui_app.ToolIdentity(
+            "0.2.0", "01" * 20, "2026-07-14T12:00:00Z",
+            "owner/ecu-firmware-release-tool", True,
+        )
+        with patch.dict(os.environ, {"LOCALAPPDATA": r"D:\Temp\update-cache"}), \
+             patch.object(ui_app, "load_release_public_keys", return_value={"k": b"x" * 32}):
+            service = ui_app.build_default_update_service(official)
+
+        self.assertIsNotNone(service)
+        self.assertEqual(service._cache_root, Path(r"D:\Temp\update-cache") / "EcuReleaseTool" / "updates")
+
     def test_ui_holds_product_mutex_for_qapplication_lifetime(self):
         events = []
 
@@ -35,7 +54,11 @@ class UiSmokeTest(unittest.TestCase):
         with (
             patch.object(ui_app, "product_run_mutex", mutex, create=True),
             patch.object(ui_app, "QApplication", Application),
-            patch.object(ui_app, "ReleaseMainWindow", lambda: events.append("window")),
+            patch.object(
+                ui_app,
+                "ReleaseMainWindow",
+                lambda **_kwargs: events.append("window"),
+            ),
         ):
             self.assertEqual(ui_app.main(["--smoke"]), 0)
 
