@@ -1,4 +1,5 @@
 import unittest
+from time import sleep
 
 from unified_can_lin_host_tool.adapters.fake import FakeCanAdapter
 from unified_can_lin_host_tool.core.errors import ErrorCategory, HostToolError
@@ -160,6 +161,43 @@ class CanIsoTpTransportTests(unittest.TestCase):
         self.assertEqual(response.payload, bytes.fromhex("76 01"))
         self.assertEqual(adapter.first_frames, 2)
         self.assertEqual(sum(1 for item in adapter.sent if item[0] & 0xF0 == 0x20), 1)
+
+    def test_flow_control_uses_transport_poll_timeout_not_uds_p2(self):
+        class DelayedFlowControlAdapter:
+            def __init__(self):
+                self.receive_calls = 0
+                self.responses = []
+                self.consecutive_frames = 0
+
+            def send_can_frame(self, _can_id, data):
+                if data[0] & 0xF0 == 0x20:
+                    self.consecutive_frames += 1
+                    if self.consecutive_frames == 2:
+                        self.responses.append(
+                            CanFrame(0x709, bytes.fromhex("02 76 01 AA AA AA AA AA"))
+                        )
+
+            def receive_can_frame(self, _can_id, _timeout_ms):
+                self.receive_calls += 1
+                if self.receive_calls == 1:
+                    return CanFrame(0x709, bytes.fromhex("30 01 00 AA AA AA AA AA"))
+                if self.receive_calls == 2:
+                    sleep(0.06)
+                    return None
+                if self.receive_calls == 3:
+                    return CanFrame(0x709, bytes.fromhex("30 01 00 AA AA AA AA AA"))
+                return self.responses.pop(0) if self.responses else None
+
+        profile = load_profile("profiles/as5pr_can_bootloader.yaml")
+        adapter = DelayedFlowControlAdapter()
+        transport = CanIsoTpTransport(adapter, profile, sleep_func=lambda _: None)
+
+        response = transport.request(
+            bytes.fromhex("36 01 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F"),
+            expect_prefix=bytes.fromhex("76 01"),
+        )
+
+        self.assertEqual(response.payload, bytes.fromhex("76 01"))
 
 
 if __name__ == "__main__":

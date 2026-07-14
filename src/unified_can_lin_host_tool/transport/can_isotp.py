@@ -116,7 +116,13 @@ class CanIsoTpTransport:
 
     def _receive_flow_control(self, *, cancel_token: CancellationToken | None) -> tuple[int, float]:
         wait_count = 0
-        deadline = monotonic() + self._timing.p2_ms / 1000.0
+        # FC 属于 ISO-TP 传输层，不能复用 UDS 应用层 P2。项目当前以总线轮询
+        # 超时作为 N_Bs 上限；这也覆盖 USB 适配器批量收发带来的调度抖动。
+        flow_control_timeout_ms = max(
+            self._timing.p2_ms,
+            self._timing.poll_timeout_ms,
+        )
+        deadline = monotonic() + flow_control_timeout_ms / 1000.0
 
         while monotonic() <= deadline:
             _throw_if_cancelled(cancel_token)
@@ -136,7 +142,7 @@ class CanIsoTpTransport:
                 wait_count += 1
                 if wait_count > CAN_ISOTP_MAX_WAIT_FRAMES:
                     raise HostToolError(ErrorCategory.TRANSPORT, "CAN ISO-TP FC WAIT exceeds limit")
-                deadline = monotonic() + self._timing.p2_ms / 1000.0
+                deadline = monotonic() + flow_control_timeout_ms / 1000.0
                 continue
             if flow_status == 0x02:
                 raise HostToolError(ErrorCategory.TRANSPORT, "CAN ISO-TP receiver reported overflow")

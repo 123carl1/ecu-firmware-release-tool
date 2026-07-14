@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 from unified_can_lin_host_tool.adapters.tsmaster import DEFAULT_TSMASTER_DLL, TS_USB_DEVICE, TsmasterAdapter
+from unified_can_lin_host_tool.adapters.usb2xxx import DEFAULT_USB2XXX_DLL, Usb2xxxAdapter
 from unified_can_lin_host_tool.as5pr.ota_state_machine import (
     As5prOtaStateMachine,
     OtaProgress,
@@ -22,7 +23,7 @@ from unified_can_lin_host_tool.transport.can_isotp import CanIsoTpTransport
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ecu-ota", description="E68 LIN / AS5PR CAN OTA 工具")
     commands = parser.add_subparsers(dest="command", required=True)
-    scan = commands.add_parser("scan", help="扫描本机已连接的 TSMaster 总线设备")
+    scan = commands.add_parser("scan", help="扫描本机已连接的同星和图莫斯总线设备")
     _hardware_arguments(scan)
     ota = commands.add_parser("ota", help="检查原生 App 镜像并执行 OTA")
     ota.add_argument("app", type=Path)
@@ -36,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _hardware_arguments(parser: argparse.ArgumentParser, *, include_project: bool = True) -> None:
     if include_project:
         parser.add_argument("--project", choices=["AS5PR"], required=True)
+    parser.add_argument("--adapter", choices=["auto", "tsmaster", "usb2xxx"], default="auto")
     parser.add_argument("--tsmaster-dll", default=DEFAULT_TSMASTER_DLL)
     parser.add_argument("--tsmaster-app", default="EcuRelease_AS5PR")
     parser.add_argument("--tsmaster-channel", type=int, default=0)
@@ -47,10 +49,31 @@ def _hardware_arguments(parser: argparse.ArgumentParser, *, include_project: boo
     parser.add_argument("--hw-subtype", type=int)
     parser.add_argument("--hw-index", type=int, default=0)
     parser.add_argument("--hw-channel", type=int, default=0)
+    parser.add_argument("--usb2xxx-dll", default=DEFAULT_USB2XXX_DLL)
     parser.add_argument("--log-dir", type=Path, default=default_log_dir())
 
 
 def _open_transport(args, config, trace):
+    adapter_kind = getattr(args, "adapter", "tsmaster")
+    if adapter_kind == "usb2xxx":
+        if args.hw_serial is None:
+            raise ValueError("必须先扫描并选择图莫斯 CAN 设备通道")
+        devices = Usb2xxxAdapter.probe_can_devices(dll_path=args.usb2xxx_dll)
+        selected = next((item for item in devices if item.serial == args.hw_serial), None)
+        if selected is None:
+            raise ValueError(f"所选图莫斯设备已离线或发生变化：SN {args.hw_serial}")
+        adapter = Usb2xxxAdapter(
+            dll_path=args.usb2xxx_dll,
+            device_serial=selected.serial,
+            device_index=selected.device_index,
+            channel=args.hw_channel,
+            baudrate=config.bus.baudrate,
+            receive_ids=(config.bus.response_id,),
+        )
+        adapter.open_can()
+        return adapter, CanIsoTpTransport(adapter, config, trace_logger=trace)
+    if adapter_kind not in {"auto", "tsmaster"}:
+        raise ValueError(f"不支持的总线设备提供方：{adapter_kind}")
     if (args.hw_name is None or args.hw_serial is None
             or args.hw_device_type is None or args.hw_subtype is None
             or args.can_channel_count is None):
@@ -94,6 +117,61 @@ def emit_progress_json(progress: OtaProgress) -> None:
     })
 
 
+def _scan_tsmaster(args) -> list[dict]:
+    devices = TsmasterAdapter.probe_can_devices(
+        dll_path=args.tsmaster_dll,
+        app_name=args.tsmaster_app + "_Scan",
+    )
+    return [
+        {
+            "adapter": "tsmaster",
+            "name": item.device_name,
+            "product": item.product,
+            "serial": item.serial,
+            "vendor": item.manufacturer,
+            "deviceType": TS_USB_DEVICE,
+            "deviceIndex": item.device_index,
+            "hwSubtype": item.hw_subtype,
+            "isCanFd": item.is_can_fd,
+            "channels": [
+                {
+                    "displayChannel": channel + 1,
+                    "hwChannel": channel,
+                    "appChannel": channel,
+                    "canChannelCount": item.can_channel_count,
+                    "baseHwChannel": 0,
+                }
+                for channel in range(item.can_channel_count)
+            ],
+        }
+        for item in devices
+    ]
+
+
+def _scan_usb2xxx(args) -> list[dict]:
+    devices = Usb2xxxAdapter.probe_can_devices(dll_path=args.usb2xxx_dll)
+    return [
+        {
+            "adapter": "usb2xxx",
+            "name": item.device_name,
+            "product": item.product,
+            "serial": item.serial,
+            "vendor": item.manufacturer,
+            "deviceIndex": item.device_index,
+            "isCanFd": item.is_can_fd,
+            "channels": [
+                {
+                    "displayChannel": channel + 1,
+                    "hwChannel": channel,
+                    "canChannelCount": item.can_channel_count,
+                }
+                for channel in range(item.can_channel_count)
+            ],
+        }
+        for item in devices
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -105,36 +183,25 @@ def main(argv: list[str] | None = None) -> int:
     try:
         project = ProjectCode(args.project)
         if args.command == "scan":
-            devices = TsmasterAdapter.probe_can_devices(
-                dll_path=args.tsmaster_dll,
-                app_name=args.tsmaster_app + "_Scan",
-            )
+            devices: list[dict] = []
+            scan_errors: list[str] = []
+            scanners = []
+            if args.adapter in {"auto", "tsmaster"}:
+                scanners.append(("同星", _scan_tsmaster))
+            if args.adapter in {"auto", "usb2xxx"}:
+                scanners.append(("图莫斯", _scan_usb2xxx))
+            for label, scanner in scanners:
+                try:
+                    devices.extend(scanner(args))
+                except Exception as exc:
+                    if args.adapter != "auto":
+                        raise
+                    scan_errors.append(f"{label}：{exc}")
             _print_json({
                 "event": "scan_result",
                 "ok": bool(devices),
-                "devices": [
-                    {
-                        "name": item.device_name,
-                        "product": item.product,
-                        "serial": item.serial,
-                        "vendor": item.manufacturer,
-                        "deviceType": TS_USB_DEVICE,
-                        "deviceIndex": item.device_index,
-                        "hwSubtype": item.hw_subtype,
-                        "isCanFd": item.is_can_fd,
-                        "channels": [
-                            {
-                                "displayChannel": channel + 1,
-                                "hwChannel": channel,
-                                "appChannel": channel,
-                                "canChannelCount": item.can_channel_count,
-                                "baseHwChannel": 0,
-                            }
-                            for channel in range(item.can_channel_count)
-                        ],
-                    }
-                    for item in devices
-                ],
+                "devices": devices,
+                "warnings": scan_errors,
             })
             return 0 if devices else 3
 
@@ -145,7 +212,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("真实刷写需要项目名确认和擦除确认")
             emit_progress_json(OtaProgress(1, "检查 App", "解析并校验原生 App 镜像"))
             loaded = prepare_as5pr_app(args.app)
-        trace = TraceLogger(args.log_dir, channel=args.tsmaster_channel + 1)
+        selected_channel = args.tsmaster_channel if args.adapter == "tsmaster" else args.hw_channel
+        trace = TraceLogger(args.log_dir, channel=selected_channel + 1)
         adapter, transport = _open_transport(args, config, trace)
         result = As5prOtaStateMachine(transport, progress=emit_progress_json).run(loaded)
         _print_json({"event": "result", "ok": result.status is OtaResultStatus.COMPLETED,

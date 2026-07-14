@@ -10,7 +10,11 @@ try:
 except ModuleNotFoundError:
     raise unittest.SkipTest("PySide6 is not installed")
 
-from unified_can_lin_host_tool.ui.release_workspace import ReleaseMainWindow, release_cli_process_command
+from unified_can_lin_host_tool.ui.release_workspace import (
+    ReleaseMainWindow,
+    release_cli_process_command,
+    release_ota_arguments,
+)
 
 
 class ReleaseWorkspaceTests(unittest.TestCase):
@@ -90,6 +94,36 @@ class ReleaseWorkspaceTests(unittest.TestCase):
 
             self.assertEqual(window.progress.value(), 67)
             self.assertEqual(window.status_label.text(), "下载 App：block 32/48")
+        finally:
+            window.close()
+
+    def test_usb2xxx_scan_result_and_ota_arguments_use_selected_sdk_channel(self):
+        window = ReleaseMainWindow()
+        try:
+            window._handle_output_line(json.dumps({
+                "event": "scan_result",
+                "ok": True,
+                "devices": [{
+                    "adapter": "usb2xxx",
+                    "name": "图莫斯 UTA0401",
+                    "product": "UTA0401",
+                    "serial": "USB-SERIAL",
+                    "deviceIndex": 0,
+                    "channels": [
+                        {"displayChannel": 1, "hwChannel": 0, "canChannelCount": 2},
+                        {"displayChannel": 2, "hwChannel": 1, "canChannelCount": 2},
+                    ],
+                }],
+            }))
+
+            self.assertEqual(window.device_combo.count(), 2)
+            window.device_combo.setCurrentIndex(1)
+            selected = window.device_combo.currentData()
+            arguments = release_ota_arguments(Path("app.hex"), "AS5PR", selected)
+
+            self.assertIn("usb2xxx", arguments)
+            self.assertEqual(arguments[arguments.index("--hw-channel") + 1], "1")
+            self.assertNotIn("--tsmaster-channel", arguments)
         finally:
             window.close()
 

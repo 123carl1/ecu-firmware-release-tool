@@ -146,39 +146,13 @@ class ReleaseMainWindow(QMainWindow):
             arguments = ["scan", "--project", project]
             self.device_combo.clear()
             self.progress.setValue(0)
-            self.status_label.setText("正在扫描 TSMaster 总线设备...")
+            self.status_label.setText("正在扫描同星和图莫斯总线设备...")
         else:
             device = self.device_combo.currentData()
             if not isinstance(device, dict):
                 self.log.appendPlainText("请先扫描并选择总线设备")
                 return
-            arguments = [
-                "ota",
-                str(package),
-                "--project",
-                project,
-                "--confirm-project",
-                project,
-                "--yes-i-know-this-erases-app",
-                "--hw-name",
-                str(device["name"]),
-                "--hw-device-type",
-                str(device["deviceType"]),
-                "--hw-serial",
-                str(device["serial"]),
-                "--hw-index",
-                str(device["deviceIndex"]),
-                "--hw-subtype",
-                str(device["hwSubtype"]),
-                "--hw-channel",
-                str(device["hwChannel"]),
-                "--tsmaster-channel",
-                str(device["appChannel"]),
-                "--can-channel-count",
-                str(device["canChannelCount"]),
-                "--base-hw-channel",
-                str(device["baseHwChannel"]),
-            ]
+            arguments = release_ota_arguments(package, project, device)
             self.progress.setValue(0)
             self.status_label.setText("正在启动 OTA...")
 
@@ -242,6 +216,8 @@ class ReleaseMainWindow(QMainWindow):
                 self.device_combo.setCurrentIndex(0)
             self.status_label.setText(f"扫描完成：发现 {count} 个 CAN 通道")
             self.log.appendPlainText(f"扫描完成：发现 {count} 个 CAN 通道")
+            for warning in message.get("warnings", []):
+                self.log.appendPlainText(f"扫描提示：{warning}")
         elif event == "progress":
             percent = max(0, min(100, int(message.get("percent", 0))))
             stage = str(message.get("stage", "OTA"))
@@ -333,3 +309,31 @@ def release_cli_process_command(arguments: list[str]) -> tuple[str, list[str]]:
     if getattr(sys, "frozen", False):
         return str(Path(sys.executable).with_name("EcuReleaseCLI.exe")), list(arguments)
     return sys.executable, ["-m", "unified_can_lin_host_tool.cli.release", *arguments]
+
+
+def release_ota_arguments(package: Path, project: str, device: dict) -> list[str]:
+    """把界面选中的真实设备端点转换为命令行参数。"""
+    adapter = str(device.get("adapter", "tsmaster"))
+    arguments = [
+        "ota", str(package),
+        "--project", project,
+        "--confirm-project", project,
+        "--yes-i-know-this-erases-app",
+        "--adapter", adapter,
+        "--hw-serial", str(device["serial"]),
+        "--hw-index", str(device["deviceIndex"]),
+        "--hw-channel", str(device["hwChannel"]),
+    ]
+    if adapter == "usb2xxx":
+        return arguments
+    if adapter != "tsmaster":
+        raise ValueError(f"不支持的总线设备提供方：{adapter}")
+    arguments.extend([
+        "--hw-name", str(device["name"]),
+        "--hw-device-type", str(device["deviceType"]),
+        "--hw-subtype", str(device["hwSubtype"]),
+        "--tsmaster-channel", str(device["appChannel"]),
+        "--can-channel-count", str(device["canChannelCount"]),
+        "--base-hw-channel", str(device["baseHwChannel"]),
+    ])
+    return arguments

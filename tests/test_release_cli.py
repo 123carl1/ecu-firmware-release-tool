@@ -5,6 +5,7 @@ import json
 
 from unified_can_lin_host_tool.as5pr.ota_state_machine import OtaProgress, OtaResult, OtaResultStatus
 from unified_can_lin_host_tool.adapters.tsmaster import TsmasterAdapter
+from unified_can_lin_host_tool.adapters.usb2xxx import Usb2xxxAdapter
 from unified_can_lin_host_tool.cli.release import _open_transport, build_parser, emit_progress_json, main
 
 
@@ -39,6 +40,10 @@ def test_scan_lists_tsmaster_devices_as_machine_readable_event(monkeypatch, caps
         "unified_can_lin_host_tool.cli.release.TsmasterAdapter.probe_can_devices",
         lambda **_: [Device()],
     )
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.Usb2xxxAdapter.probe_can_devices",
+        lambda **_: [],
+    )
 
     assert main(["scan", "--project", "AS5PR"]) == 0
     output = json.loads(capsys.readouterr().out)
@@ -61,6 +66,73 @@ def test_scan_lists_tsmaster_devices_as_machine_readable_event(monkeypatch, caps
     assert len(output["devices"]) == 1
 
 
+def test_scan_combines_usb2xxx_sdk_devices(monkeypatch, capsys):
+    device = type("Device", (), {
+        "device_name": "图莫斯 UTA0401",
+        "product": "UTA0401",
+        "serial": "USB-SERIAL",
+        "manufacturer": "TOOMOSS",
+        "device_index": 0,
+        "can_channel_count": 2,
+        "is_can_fd": False,
+    })()
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.TsmasterAdapter.probe_can_devices",
+        lambda **_: [],
+    )
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.Usb2xxxAdapter.probe_can_devices",
+        lambda **_: [device],
+    )
+
+    assert main(["scan", "--project", "AS5PR"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["devices"][0]["adapter"] == "usb2xxx"
+    assert output["devices"][0]["product"] == "UTA0401"
+    assert output["devices"][0]["channels"] == [
+        {"displayChannel": 1, "hwChannel": 0, "canChannelCount": 2},
+        {"displayChannel": 2, "hwChannel": 1, "canChannelCount": 2},
+    ]
+
+
+def test_usb2xxx_ota_rebinds_selected_serial(monkeypatch):
+    calls = {}
+    selected = type("Device", (), {
+        "serial": "USB-SERIAL", "device_index": 4,
+        "can_channel_count": 2,
+    })()
+
+    class Adapter:
+        @classmethod
+        def probe_can_devices(cls, **kwargs):
+            return [selected]
+
+        def __init__(self, **kwargs):
+            calls["init"] = kwargs
+
+        def open_can(self):
+            calls["opened"] = True
+
+    monkeypatch.setattr("unified_can_lin_host_tool.cli.release.Usb2xxxAdapter", Adapter)
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.CanIsoTpTransport",
+        lambda adapter, config, trace_logger: (adapter, config, trace_logger),
+    )
+    args = SimpleNamespace(
+        adapter="usb2xxx", usb2xxx_dll="USB2XXX.dll",
+        hw_serial="USB-SERIAL", hw_channel=1,
+    )
+    config = SimpleNamespace(bus=SimpleNamespace(baudrate=500000, response_id=0x709))
+
+    _open_transport(args, config, object())
+
+    assert calls["init"]["device_serial"] == "USB-SERIAL"
+    assert calls["init"]["device_index"] == 4
+    assert calls["init"]["channel"] == 1
+    assert calls["init"]["receive_ids"] == (config.bus.response_id,)
+    assert calls["opened"] is True
+
+
 def test_scan_does_not_filter_another_tosun_model(monkeypatch, capsys):
     device = type("Device", (), {
         "device_name": "TC1026",
@@ -75,6 +147,10 @@ def test_scan_does_not_filter_another_tosun_model(monkeypatch, capsys):
     monkeypatch.setattr(
         "unified_can_lin_host_tool.cli.release.TsmasterAdapter.probe_can_devices",
         lambda **_: [device],
+    )
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.Usb2xxxAdapter.probe_can_devices",
+        lambda **_: [],
     )
 
     assert main(["scan", "--project", "AS5PR"]) == 0
