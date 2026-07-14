@@ -177,6 +177,8 @@ def test_pwsh_failure_preamble_prevents_later_native_commands(tmp_path):
         ["pwsh.exe", "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
 
