@@ -2,11 +2,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import json
+import pytest
 
 from unified_can_lin_host_tool.as5pr.ota_state_machine import OtaProgress, OtaResult, OtaResultStatus
 from unified_can_lin_host_tool.adapters.tsmaster import TsmasterAdapter
 from unified_can_lin_host_tool.adapters.usb2xxx import Usb2xxxAdapter
+from unified_can_lin_host_tool.cli import release as release_cli
 from unified_can_lin_host_tool.cli.release import _open_transport, build_parser, emit_progress_json, main
+from unified_can_lin_host_tool.tool_identity import ToolIdentity
 
 
 def test_cli_exposes_only_scan_and_native_ota_commands():
@@ -25,6 +28,17 @@ def test_cli_exposes_only_scan_and_native_ota_commands():
             assert exc.code == 2
         else:
             raise AssertionError(f"legacy command remains exposed: {removed}")
+
+
+def test_cli_version_reports_tool_version_and_short_commit(monkeypatch, capsys):
+    identity = ToolIdentity("0.2.0", "01" * 20, "", "", False)
+    monkeypatch.setattr(release_cli, "get_tool_identity", lambda: identity, raising=False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["--version"])
+
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out == "EcuReleaseCLI 0.2.0 (commit 0101010)\n"
 
 
 def test_scan_lists_tsmaster_devices_as_machine_readable_event(monkeypatch, capsys):
@@ -323,7 +337,10 @@ def test_ota_rebinds_selected_serial_to_current_tsmaster_device_index(monkeypatc
     assert calls["opened"] is True
 
 
-def test_progress_is_emitted_as_json_line(capsys):
+def test_progress_is_emitted_as_json_line(monkeypatch, capsys):
+    identity = ToolIdentity("0.2.0", "01" * 20, "", "", False)
+    monkeypatch.setattr(release_cli, "get_tool_identity", lambda: identity, raising=False)
+
     emit_progress_json(OtaProgress(67, "下载 App", "block 32/48", 32, 48))
 
     output = json.loads(capsys.readouterr().out)
@@ -334,6 +351,8 @@ def test_progress_is_emitted_as_json_line(capsys):
         "message": "block 32/48",
         "current": 32,
         "total": 48,
+        "toolVersion": "0.2.0",
+        "toolCommit": "01" * 20,
     }
 
 

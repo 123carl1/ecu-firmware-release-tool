@@ -16,12 +16,19 @@ from unified_can_lin_host_tool.as5pr.ota_state_machine import (
 )
 from unified_can_lin_host_tool.release.project_config import ProjectCode, get_project_config
 from unified_can_lin_host_tool.release.runtime_ota import prepare_as5pr_app
+from unified_can_lin_host_tool.tool_identity import get_tool_identity
 from unified_can_lin_host_tool.trace import TraceLogger, default_log_dir
 from unified_can_lin_host_tool.transport.can_isotp import CanIsoTpTransport
 
 
 def build_parser() -> argparse.ArgumentParser:
+    identity = get_tool_identity()
     parser = argparse.ArgumentParser(prog="ecu-ota", description="E68 LIN / AS5PR CAN OTA 工具")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"EcuReleaseCLI {identity.version} (commit {identity.short_commit})",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     scan = commands.add_parser("scan", help="扫描本机已连接的同星和图莫斯总线设备")
     _hardware_arguments(scan)
@@ -103,7 +110,11 @@ def _open_transport(args, config, trace):
 
 
 def _print_json(payload: dict) -> None:
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    identity = get_tool_identity()
+    event = dict(payload)
+    event["toolVersion"] = identity.version
+    event["toolCommit"] = identity.commit
+    print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
 def emit_progress_json(progress: OtaProgress) -> None:

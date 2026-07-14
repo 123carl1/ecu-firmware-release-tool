@@ -22,12 +22,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from unified_can_lin_host_tool.tool_identity import get_tool_identity
 
 
 class ReleaseMainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("E68 LIN / AS5PR CAN OTA 工具")
+        identity = get_tool_identity()
+        self.setWindowTitle(f"ECU Firmware Release Tool {identity.version}")
         self.resize(920, 620)
         self._process: QProcess | None = None
         self._operation = ""
@@ -77,6 +79,9 @@ class ReleaseMainWindow(QMainWindow):
         layout.addWidget(QLabel("运行日志"))
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.log.appendPlainText(
+            f"版本 {identity.version}，提交 {identity.short_commit}"
+        )
         layout.addWidget(self.log, 1)
         self.setCentralWidget(root)
 

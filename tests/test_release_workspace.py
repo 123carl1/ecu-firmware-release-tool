@@ -16,12 +16,25 @@ from unified_can_lin_host_tool.ui.release_workspace import (
     release_ota_arguments,
 )
 from unified_can_lin_host_tool.ui import release_workspace
+from unified_can_lin_host_tool.tool_identity import ToolIdentity
 
 
 class ReleaseWorkspaceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_workspace_displays_tool_identity_in_title_and_startup_log(self):
+        identity = ToolIdentity("0.2.0", "01" * 20, "", "", False)
+        with patch.object(
+            release_workspace, "get_tool_identity", return_value=identity, create=True
+        ):
+            window = ReleaseMainWindow()
+        try:
+            self.assertEqual(window.windowTitle(), "ECU Firmware Release Tool 0.2.0")
+            self.assertIn("版本 0.2.0，提交 0101010", window.log.toPlainText())
+        finally:
+            window.close()
 
     def test_workspace_exposes_only_scan_and_ota_primary_actions(self):
         window = ReleaseMainWindow()
