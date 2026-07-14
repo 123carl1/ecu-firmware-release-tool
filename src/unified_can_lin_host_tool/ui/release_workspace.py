@@ -143,7 +143,7 @@ class ReleaseMainWindow(QMainWindow):
             return
 
         if operation == "scan":
-            arguments = ["scan", "--project", project]
+            arguments = release_scan_arguments(project)
             self.device_combo.clear()
             self.progress.setValue(0)
             self.status_label.setText("正在扫描同星和图莫斯总线设备...")
@@ -309,6 +309,11 @@ def release_cli_process_command(arguments: list[str]) -> tuple[str, list[str]]:
     if getattr(sys, "frozen", False):
         return str(Path(sys.executable).with_name("EcuReleaseCLI.exe")), list(arguments)
     return sys.executable, ["-m", "unified_can_lin_host_tool.cli.release", *arguments]
+
+
+def release_scan_arguments(project: str) -> list[str]:
+    """图形界面扫描同时探测同星和图莫斯设备。"""
+    return ["scan", "--project", project, "--adapter", "auto"]
 
 
 def release_ota_arguments(package: Path, project: str, device: dict) -> list[str]:

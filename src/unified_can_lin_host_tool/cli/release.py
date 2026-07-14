@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _hardware_arguments(parser: argparse.ArgumentParser, *, include_project: bool = True) -> None:
     if include_project:
         parser.add_argument("--project", choices=["AS5PR"], required=True)
-    parser.add_argument("--adapter", choices=["auto", "tsmaster", "usb2xxx"], default="auto")
+    parser.add_argument("--adapter", choices=["auto", "tsmaster", "usb2xxx"], default="tsmaster")
     parser.add_argument("--tsmaster-dll", default=DEFAULT_TSMASTER_DLL)
     parser.add_argument("--tsmaster-app", default="EcuRelease_AS5PR")
     parser.add_argument("--tsmaster-channel", type=int, default=0)
@@ -197,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
                     if args.adapter != "auto":
                         raise
                     scan_errors.append(f"{label}：{exc}")
+            if not devices and scan_errors:
+                raise RuntimeError(f"设备扫描失败：{'；'.join(scan_errors)}")
             _print_json({
                 "event": "scan_result",
                 "ok": bool(devices),
@@ -212,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("真实刷写需要项目名确认和擦除确认")
             emit_progress_json(OtaProgress(1, "检查 App", "解析并校验原生 App 镜像"))
             loaded = prepare_as5pr_app(args.app)
-        selected_channel = args.tsmaster_channel if args.adapter == "tsmaster" else args.hw_channel
+        selected_channel = args.hw_channel if args.adapter == "usb2xxx" else args.tsmaster_channel
         trace = TraceLogger(args.log_dir, channel=selected_channel + 1)
         adapter, transport = _open_transport(args, config, trace)
         result = As5prOtaStateMachine(transport, progress=emit_progress_json).run(loaded)

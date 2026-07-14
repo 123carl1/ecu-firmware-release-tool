@@ -1,5 +1,7 @@
 from ctypes import c_uint
 from pathlib import Path
+import subprocess
+import tempfile
 
 from unified_can_lin_host_tool.adapters import usb2xxx
 from unified_can_lin_host_tool.adapters.usb2xxx import (
@@ -7,6 +9,40 @@ from unified_can_lin_host_tool.adapters.usb2xxx import (
     Usb2xxxAdapter,
     _Usb2xxxApi,
 )
+
+
+def test_installer_runtime_validation_rejects_same_size_tampered_dlls():
+    script = Path("scripts/build_windows_installer.ps1").resolve()
+    script_text = script.read_text(encoding="utf-8")
+    assert "ValidateUsb2xxxRuntimeOnly" in script_text, (
+        "installer runtime-only validation entry is missing"
+    )
+    assert "7857f3c43b5f5f41414da0ce04f2914d45af805a7ad0e14a0aa84b6a16a42d1b" in script_text
+    assert "a8c91f0ff68fb7802a9f4416728f0eeb4d99af4ceaa4ef7dfe9374e76e375018" in script_text
+
+    with tempfile.TemporaryDirectory(dir=r"D:\Temp") as directory:
+        sdk_root = Path(directory)
+        dll_dir = sdk_root / "sdk" / "libs" / "windows" / "x86_64"
+        dll_dir.mkdir(parents=True)
+        (dll_dir / "USB2XXX.dll").write_bytes(b"X" * 538112)
+        (dll_dir / "libusb-1.0.dll").write_bytes(b"Y" * 157696)
+
+        result = subprocess.run(
+            [
+                "pwsh", "-NoProfile", "-NonInteractive", "-File", str(script),
+                "-ValidateUsb2xxxRuntimeOnly", "-Usb2xxxSdkRoot", str(sdk_root),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "USB2XXX.dll SHA256 mismatch" in output
 
 
 def test_default_dll_search_uses_only_runtime_and_common_install_locations(monkeypatch):
@@ -126,11 +162,23 @@ def test_low_level_send_prefers_usb_nonexclusive_synchronous_api():
             calls.append(("sync", handle, channel, count))
             return 1
 
-        def CAN_SendMsg(self, *_args):
-            raise AssertionError("exclusive USB send API must not be used")
-
     api = _Usb2xxxApi.__new__(_Usb2xxxApi)
     api.dll = Dll()
 
     assert api.send_can(101, 0, 0x701, b"\xAA" * 8) == 1
     assert calls == [("sync", 101, 0, 1)]
+
+
+def test_low_level_send_falls_back_for_legacy_dll_without_synchronous_api():
+    calls = []
+
+    class Dll:
+        def CAN_SendMsg(self, handle, channel, _message, count):
+            calls.append(("legacy", handle, channel, count))
+            return 1
+
+    api = _Usb2xxxApi.__new__(_Usb2xxxApi)
+    api.dll = Dll()
+
+    assert api.send_can(101, 1, 0x701, b"\xAA" * 8) == 1
+    assert calls == [("legacy", 101, 1, 1)]

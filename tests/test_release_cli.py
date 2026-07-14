@@ -11,7 +11,9 @@ from unified_can_lin_host_tool.cli.release import _open_transport, build_parser,
 
 def test_cli_exposes_only_scan_and_native_ota_commands():
     parser = build_parser()
-    assert parser.parse_args(["scan", "--project", "AS5PR"]).command == "scan"
+    scan_args = parser.parse_args(["scan", "--project", "AS5PR"])
+    assert scan_args.command == "scan"
+    assert scan_args.adapter == "tsmaster"
     assert parser.parse_args([
         "ota", "app.hex", "--project", "AS5PR",
         "--confirm-project", "AS5PR", "--yes-i-know-this-erases-app",
@@ -85,7 +87,7 @@ def test_scan_combines_usb2xxx_sdk_devices(monkeypatch, capsys):
         lambda **_: [device],
     )
 
-    assert main(["scan", "--project", "AS5PR"]) == 0
+    assert main(["scan", "--project", "AS5PR", "--adapter", "auto"]) == 0
     output = json.loads(capsys.readouterr().out)
     assert output["devices"][0]["adapter"] == "usb2xxx"
     assert output["devices"][0]["product"] == "UTA0401"
@@ -93,6 +95,78 @@ def test_scan_combines_usb2xxx_sdk_devices(monkeypatch, capsys):
         {"displayChannel": 1, "hwChannel": 0, "canChannelCount": 2},
         {"displayChannel": 2, "hwChannel": 1, "canChannelCount": 2},
     ]
+
+
+def test_default_scan_preserves_tsmaster_error_event_and_exit_code(monkeypatch, capsys):
+    def fail_tsmaster(**_kwargs):
+        raise RuntimeError("TSMaster SDK unavailable")
+
+    def reject_usb2xxx(**_kwargs):
+        raise AssertionError("legacy default scan must not call USB2XXX")
+
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.TsmasterAdapter.probe_can_devices",
+        fail_tsmaster,
+    )
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.Usb2xxxAdapter.probe_can_devices",
+        reject_usb2xxx,
+    )
+
+    assert main(["scan", "--project", "AS5PR"]) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["event"] == "error"
+    assert "TSMaster SDK unavailable" in output["error"]
+
+
+def test_auto_scan_with_no_devices_and_scanner_error_returns_error(monkeypatch, capsys):
+    def fail_tsmaster(**_kwargs):
+        raise RuntimeError("TSMaster SDK unavailable")
+
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.TsmasterAdapter.probe_can_devices",
+        fail_tsmaster,
+    )
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.Usb2xxxAdapter.probe_can_devices",
+        lambda **_kwargs: [],
+    )
+
+    assert main(["scan", "--project", "AS5PR", "--adapter", "auto"]) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["event"] == "error"
+    assert "TSMaster SDK unavailable" in output["error"]
+    assert "devices" not in output
+
+
+def test_auto_scan_keeps_discovered_devices_and_scanner_warnings(monkeypatch, capsys):
+    device = type("Device", (), {
+        "device_name": "图莫斯 UTA0401",
+        "product": "UTA0401",
+        "serial": "USB-SERIAL",
+        "manufacturer": "TOOMOSS",
+        "device_index": 0,
+        "can_channel_count": 1,
+        "is_can_fd": False,
+    })()
+
+    def fail_tsmaster(**_kwargs):
+        raise RuntimeError("TSMaster SDK unavailable")
+
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.TsmasterAdapter.probe_can_devices",
+        fail_tsmaster,
+    )
+    monkeypatch.setattr(
+        "unified_can_lin_host_tool.cli.release.Usb2xxxAdapter.probe_can_devices",
+        lambda **_kwargs: [device],
+    )
+
+    assert main(["scan", "--project", "AS5PR", "--adapter", "auto"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["event"] == "scan_result"
+    assert output["devices"][0]["adapter"] == "usb2xxx"
+    assert output["warnings"] == ["同星：TSMaster SDK unavailable"]
 
 
 def test_usb2xxx_ota_rebinds_selected_serial(monkeypatch):
@@ -266,6 +340,7 @@ def test_progress_is_emitted_as_json_line(capsys):
 def test_native_ota_reaches_state_machine_without_legacy_flash_arguments(monkeypatch, tmp_path: Path):
     prepared = type("Prepared", (), {"release_set_id": "a" * 64})()
     calls = []
+    trace_arguments = {}
 
     class Adapter:
         def close(self):
@@ -277,7 +352,11 @@ def test_native_ota_reaches_state_machine_without_legacy_flash_arguments(monkeyp
             calls.append("trace-close")
 
     monkeypatch.setattr("unified_can_lin_host_tool.cli.release.prepare_as5pr_app", lambda _: prepared)
-    monkeypatch.setattr("unified_can_lin_host_tool.cli.release.TraceLogger", lambda *_args, **_kwargs: Trace())
+    def create_trace(*_args, **kwargs):
+        trace_arguments.update(kwargs)
+        return Trace()
+
+    monkeypatch.setattr("unified_can_lin_host_tool.cli.release.TraceLogger", create_trace)
     monkeypatch.setattr("unified_can_lin_host_tool.cli.release._open_transport", lambda *_: (Adapter(), object()))
 
     def run(_self, package):
@@ -289,5 +368,7 @@ def test_native_ota_reaches_state_machine_without_legacy_flash_arguments(monkeyp
     assert main([
         "ota", str(tmp_path / "app.hex"), "--project", "AS5PR",
         "--confirm-project", "AS5PR", "--yes-i-know-this-erases-app",
+        "--adapter", "auto", "--tsmaster-channel", "3", "--hw-channel", "1",
     ]) == 0
     assert prepared in calls
+    assert trace_arguments["channel"] == 4

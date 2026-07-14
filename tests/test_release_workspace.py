@@ -15,6 +15,7 @@ from unified_can_lin_host_tool.ui.release_workspace import (
     release_cli_process_command,
     release_ota_arguments,
 )
+from unified_can_lin_host_tool.ui import release_workspace
 
 
 class ReleaseWorkspaceTests(unittest.TestCase):
@@ -94,6 +95,27 @@ class ReleaseWorkspaceTests(unittest.TestCase):
 
             self.assertEqual(window.progress.value(), 67)
             self.assertEqual(window.status_label.text(), "下载 App：block 32/48")
+        finally:
+            window.close()
+
+    def test_gui_scan_arguments_explicitly_select_auto_adapter(self):
+        self.assertEqual(
+            release_workspace.release_scan_arguments("AS5PR"),
+            ["scan", "--project", "AS5PR", "--adapter", "auto"],
+        )
+
+    def test_scan_error_is_shown_as_failure_instead_of_zero_channels(self):
+        window = ReleaseMainWindow()
+        try:
+            window._handle_output_line(json.dumps({
+                "event": "error",
+                "ok": False,
+                "error": "设备扫描失败：同星 SDK 不可用",
+            }))
+
+            self.assertEqual(window.device_combo.count(), 0)
+            self.assertEqual(window.status_label.text(), "失败：设备扫描失败：同星 SDK 不可用")
+            self.assertNotIn("扫描完成", window.status_label.text())
         finally:
             window.close()
 

@@ -191,7 +191,9 @@ class _Usb2xxxApi:
             message.Data[index] = value
         # CAN_SendMsg 会在发送期间独占 USB，总线端快速返回的 ISO-TP FC 可能因此丢失。
         # 新版 SDK 的同步接口不会独占 USB；旧版 DLL 不具备该符号时才回退。
-        send = getattr(self.dll, "CAN_SendMsgSynch", self.dll.CAN_SendMsg)
+        send = getattr(self.dll, "CAN_SendMsgSynch", None)
+        if send is None:
+            send = self.dll.CAN_SendMsg
         return int(send(handle, channel, byref(message), 1))
 
     def receive_can(self, handle: int, channel: int) -> list[dict]:
