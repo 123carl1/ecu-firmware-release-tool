@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+import subprocess
+import sys
+
+import yaml
 
 
 PINNED_ACTIONS = {
@@ -84,13 +88,15 @@ def test_publish_verifies_assets_before_making_draft_public():
     digest_check = publish_text.index(".digest")
     make_public = publish_text.index("gh release edit")
     assert "releases/tags/$env:GITHUB_REF_NAME" in publish_text
+    absence_check = publish_text.index("releases?per_page=100")
     assert "--draft --verify-tag" in publish_text
     assert "release_signing.py assert-key" in publish_text
     assert "build-update" in publish_text
     assert "write-sha256sums" in publish_text
     assert "update.json.sig" in publish_text
     assert "SHA256SUMS.txt" in publish_text
-    assert create < digest_check < make_public
+    assert absence_check < create < digest_check < make_public
+    assert "$LASTEXITCODE -eq 0" not in publish_text
     assert "--draft=false --latest" in publish_text
 
 
@@ -118,3 +124,61 @@ def test_public_documentation_states_distribution_and_security_boundaries():
         assert phrase in readme
     assert "0.2.0" in notes
     assert "未知发布者" in notes
+
+
+def _native_command_count(script: str) -> int:
+    pattern = re.compile(
+        r"^\s*(?:&\s+['\"][^'\"]+\.exe['\"](?=\s|$)|(?:git|gh|python|pwsh\.exe)\b)"
+    )
+    return sum(pattern.search(line) is not None for line in script.splitlines())
+
+
+def test_multi_native_command_pwsh_blocks_stop_on_first_failure():
+    checked_steps: list[str] = []
+    for path in [".github/workflows/ci.yml", ".github/workflows/release.yml"]:
+        document = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        for job in document["jobs"].values():
+            for step in job.get("steps", []):
+                script = step.get("run")
+                if step.get("shell") != "pwsh" or not isinstance(script, str):
+                    continue
+                if _native_command_count(script) < 2:
+                    continue
+                lines = [line.strip() for line in script.splitlines() if line.strip()]
+                checked_steps.append(step["name"])
+                assert lines[:2] == [
+                    "$PSNativeCommandUseErrorActionPreference = $true",
+                    "$ErrorActionPreference = 'Stop'",
+                ], step["name"]
+
+    assert set(checked_steps) == {
+        "Gate tag, version, default branch history and clean inputs",
+        "Scan current tree and complete history",
+        "Verify signing key and generate signed release files",
+        "Create draft, verify uploaded assets, then publish",
+    }
+    assert checked_steps.count("Scan current tree and complete history") == 2
+
+
+def test_pwsh_failure_preamble_prevents_later_native_commands(tmp_path):
+    marker = tmp_path / "must-not-exist.txt"
+    python = sys.executable.replace("'", "''")
+    marker_text = str(marker).replace("'", "''")
+    script = "\n".join(
+        [
+            "$PSNativeCommandUseErrorActionPreference = $true",
+            "$ErrorActionPreference = 'Stop'",
+            f"& '{python}' -c \"import sys; sys.exit(23)\"",
+            f"& '{python}' -c \"from pathlib import Path; Path(r'{marker_text}').write_text('continued')\"",
+        ]
+    )
+
+    result = subprocess.run(
+        ["pwsh.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert not marker.exists()

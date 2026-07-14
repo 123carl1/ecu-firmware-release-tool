@@ -30,6 +30,8 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_REF_NAME -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
             throw "Noncanonical release tag: $env:GITHUB_REF_NAME"
           }
@@ -43,28 +45,39 @@ jobs:
         run: python -m pip install --require-hashes -r requirements-release.lock
       - name: Bootstrap pinned release tools
         shell: pwsh
-        run: pwsh.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/bootstrap_release_tools.ps1
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/bootstrap_release_tools.ps1
       - name: Scan current tree and complete history
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
           & 'D:\software\gitleaks\8.30.1\gitleaks.exe' dir . --config=.gitleaks.toml --redact
           & 'D:\software\gitleaks\8.30.1\gitleaks.exe' git . --log-opts="--all" --config=.gitleaks.toml --redact
       - name: Run all tests
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
           $env:PYTHONPATH=(Resolve-Path 'src').Path
           $env:QT_QPA_PLATFORM='offscreen'
           python -m pytest -q
       - name: Build and audit installer
         shell: pwsh
-        run: >-
-          pwsh.exe -NoProfile -ExecutionPolicy Bypass
-          -File ./scripts/build_windows_installer.ps1
-          -PythonPath (Get-Command python).Source
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass `
+          -File ./scripts/build_windows_installer.ps1 `
+          -PythonPath (Get-Command python).Source `
           -IsccPath 'D:\software\InnoSetup\6.7.3\ISCC.exe'
       - name: Require audited outputs
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
           Get-Item .\dist\release-audit.json | Out-Null
           Get-Item ".\dist\installer\EcuReleaseTool_Setup_$($env:GITHUB_REF_NAME.Substring(1)).exe" | Out-Null
       - name: Upload unsigned audited release inputs
@@ -110,6 +123,8 @@ jobs:
       - name: Verify signing key and generate signed release files
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
           $Version = $env:GITHUB_REF_NAME.Substring(1)
           $Installer = Resolve-Path ".\release-input\dist\installer\EcuReleaseTool_Setup_$Version.exe"
           Get-FileHash -LiteralPath $Installer -Algorithm SHA256 | Format-List
@@ -122,9 +137,11 @@ jobs:
       - name: Create draft, verify uploaded assets, then publish
         shell: pwsh
         run: |
-          $Existing = gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" 2>&1
-          if ($LASTEXITCODE -eq 0) { throw "Release $env:GITHUB_REF_NAME already exists." }
-          if ($Existing -notmatch 'HTTP 404') { throw "Cannot prove release absence: $Existing" }
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ErrorActionPreference = 'Stop'
+          $TagJson = $env:GITHUB_REF_NAME | ConvertTo-Json -Compress
+          $Existing = gh api -H 'X-GitHub-Api-Version: 2022-11-28' --paginate "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == $TagJson) | .id"
+          if ($Existing) { throw "Release $env:GITHUB_REF_NAME already exists." }
           $Assets = @(
             (Resolve-Path ".\release-input\dist\installer\EcuReleaseTool_Setup_$($env:GITHUB_REF_NAME.Substring(1)).exe").Path,
             (Resolve-Path '.\release-input\update.json').Path,
