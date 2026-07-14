@@ -67,16 +67,91 @@ def test_default_dll_search_uses_only_runtime_and_common_install_locations(monke
     assert checked_paths == [configured, frozen, executable, common_install]
 
 
-def test_hardware_info_channel_fields_match_official_sdk_offsets():
-    lin_field = getattr(HARDWARE_INFO, "LINChannelNum", None)
-    actual_offsets = (
-        HARDWARE_INFO.CANChannelNum.offset,
-        None if lin_field is None else lin_field.offset,
-        HARDWARE_INFO.PWMChannelNum.offset,
-        HARDWARE_INFO.HaveCANFD.offset,
-    )
+def test_hardware_info_matches_official_sdk_structure_contract():
+    expected_names = [
+        "McuModel",
+        "ProductModel",
+        "Version",
+        "CANChannelNum",
+        "LINChannelNum",
+        "PWMChannelNum",
+        "HaveCANFD",
+        "DIChannelNum",
+        "DOChannelNum",
+        "HaveIsolation",
+        "ExPowerSupply",
+        "IsOEM",
+        "EECapacity",
+        "SPIFlashCapacity",
+        "TFCardSupport",
+        "ProductionDate",
+        "USBControl",
+        "SerialControl",
+        "EthControl",
+        "VbatChannel",
+    ]
+    expected_offsets = [
+        0,
+        16,
+        32,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        60,
+        61,
+        62,
+        63,
+    ]
 
-    assert actual_offsets == (36, 37, 38, 39)
+    assert sizeof(HARDWARE_INFO) == 64
+    assert [name for name, _field_type in HARDWARE_INFO._fields_] == expected_names
+    assert [getattr(HARDWARE_INFO, name).offset for name in expected_names] == expected_offsets
+
+
+def test_hardware_info_matches_official_sdk_unsigned_field_types():
+    expected_types = [
+        c_ubyte * 16,
+        c_ubyte * 16,
+        c_uint,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte * 12,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+        c_ubyte,
+    ]
+
+    assert [field_type for _name, field_type in HARDWARE_INFO._fields_] == expected_types
+
+
+def test_text_reads_product_model_from_hardware_info_bytes():
+    hardware = HARDWARE_INFO()
+    raw = (c_ubyte * sizeof(HARDWARE_INFO)).from_address(addressof(hardware))
+    product_model = b"UTA0401\0"
+    raw[16 : 16 + len(product_model)] = product_model
+
+    assert usb2xxx._text(bytes(hardware.ProductModel)) == "UTA0401"
 
 
 def test_hardware_info_raw_bytes_keep_can_lin_pwm_and_canfd_sentinels():
