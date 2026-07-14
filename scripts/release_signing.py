@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 from importlib import import_module
 import json
 import os
@@ -11,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from typing import Sequence
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -23,6 +25,9 @@ if str(_SOURCE_ROOT) not in sys.path:
 parse_release_public_keys = import_module(
     "unified_can_lin_host_tool.update.release_keys"
 ).parse_release_public_keys
+SemanticVersion = import_module(
+    "unified_can_lin_host_tool.versioning"
+).SemanticVersion
 
 
 _SIGNING_KEY_ENVIRONMENT = "UPDATE_SIGNING_KEY_PEM"
@@ -138,6 +143,45 @@ def sign_update_file(input_path: Path, signature_path: Path) -> None:
     _atomic_write(signature_path, signature)
 
 
+def build_update_json(
+    *,
+    repository: str,
+    version: str,
+    commit: str,
+    generated_at: str,
+    release_notes: str,
+    installer: Path,
+    key_id: str,
+) -> bytes:
+    """按固定字段顺序生成待签名的稳定通道更新信息。"""
+
+    parsed = SemanticVersion.parse(version)
+    payload = {
+        "schemaVersion": 1,
+        "repository": repository,
+        "version": str(parsed),
+        "tag": f"v{parsed}",
+        "commit": commit,
+        "generatedAt": generated_at,
+        "channel": "stable",
+        "releaseNotes": release_notes,
+        "installer": {
+            "name": installer.name,
+            "size": installer.stat().st_size,
+            "sha256": hashlib.sha256(installer.read_bytes()).hexdigest(),
+        },
+        "keyId": key_id,
+    }
+    return (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def write_sha256sums(files: Sequence[Path], output: Path) -> None:
+    """按调用方给定顺序写入 GNU 风格 SHA-256 清单。"""
+
+    rows = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}" for path in files]
+    output.write_text("\n".join(rows) + "\n", encoding="utf-8", newline="\n")
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="自动更新发布签名工具")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -154,6 +198,20 @@ def build_argument_parser() -> argparse.ArgumentParser:
     verify_key = commands.add_parser("assert-key", help="核对环境私钥与固化公钥")
     verify_key.add_argument("--public-keys", required=True, type=Path)
     verify_key.add_argument("--key-id", required=True)
+
+    build_update = commands.add_parser("build-update", help="生成规范更新信息")
+    build_update.add_argument("--repository", required=True)
+    build_update.add_argument("--version", required=True)
+    build_update.add_argument("--commit", required=True)
+    build_update.add_argument("--generated-at", required=True)
+    build_update.add_argument("--release-notes", required=True, type=Path)
+    build_update.add_argument("--installer", required=True, type=Path)
+    build_update.add_argument("--key-id", required=True)
+    build_update.add_argument("--output", required=True, type=Path)
+
+    checksums = commands.add_parser("write-sha256sums", help="生成发布文件 SHA-256 清单")
+    checksums.add_argument("--output", required=True, type=Path)
+    checksums.add_argument("files", nargs="+", type=Path)
     return parser
 
 
@@ -170,6 +228,19 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.public_keys,
                 arguments.key_id,
             )
+        elif arguments.command == "build-update":
+            raw = build_update_json(
+                repository=arguments.repository,
+                version=arguments.version,
+                commit=arguments.commit,
+                generated_at=arguments.generated_at,
+                release_notes=arguments.release_notes.read_text(encoding="utf-8"),
+                installer=arguments.installer,
+                key_id=arguments.key_id,
+            )
+            _atomic_write(arguments.output, raw)
+        elif arguments.command == "write-sha256sums":
+            write_sha256sums(arguments.files, arguments.output)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1

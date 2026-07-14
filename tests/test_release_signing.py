@@ -186,3 +186,61 @@ def test_sign_cli_has_no_private_key_argument():
     option_strings = {option for action in sign_parser._actions for option in action.option_strings}
     assert "--private-key" not in option_strings
     assert "--private-key-pem" not in option_strings
+
+
+def test_build_update_json_writes_canonical_utf8_payload(tmp_path):
+    installer = tmp_path / "EcuReleaseTool_Setup_0.2.0.exe"
+    installer.write_bytes(b"signed installer")
+
+    raw = release_signing.build_update_json(
+        repository="owner/ecu-firmware-release-tool",
+        version="0.2.0",
+        commit="01" * 20,
+        generated_at="2026-07-14T12:00:00Z",
+        release_notes="首个自动更新版本。",
+        installer=installer,
+        key_id="release-v1",
+    )
+
+    assert not raw.startswith(b"\xef\xbb\xbf")
+    assert raw.endswith(b"\n") and not raw.endswith(b"\n\n")
+    assert raw == (
+        b'{"schemaVersion":1,"repository":"owner/ecu-firmware-release-tool",'
+        b'"version":"0.2.0","tag":"v0.2.0","commit":"0101010101010101010101010101010101010101",'
+        b'"generatedAt":"2026-07-14T12:00:00Z","channel":"stable",'
+        b'"releaseNotes":"\xe9\xa6\x96\xe4\xb8\xaa\xe8\x87\xaa\xe5\x8a\xa8\xe6\x9b\xb4\xe6\x96\xb0\xe7\x89\x88\xe6\x9c\xac\xe3\x80\x82",'
+        b'"installer":{"name":"EcuReleaseTool_Setup_0.2.0.exe","size":16,'
+        b'"sha256":"be2ce2dd28b0293e480f9d7443bc99b442ae06348b010a6f8043c667b15d4a5a"},'
+        b'"keyId":"release-v1"}\n'
+    )
+
+
+def test_build_update_json_rejects_noncanonical_version(tmp_path):
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"x")
+
+    with pytest.raises(ValueError):
+        release_signing.build_update_json(
+            repository="owner/ecu-firmware-release-tool",
+            version="01.2.3",
+            commit="01" * 20,
+            generated_at="2026-07-14T12:00:00Z",
+            release_notes="notes",
+            installer=installer,
+            key_id="release-v1",
+        )
+
+
+def test_write_sha256sums_preserves_supplied_file_order_and_lf(tmp_path):
+    first = tmp_path / "update.json"
+    second = tmp_path / "EcuReleaseTool_Setup_0.2.0.exe"
+    output = tmp_path / "SHA256SUMS.txt"
+    first.write_bytes(b"metadata")
+    second.write_bytes(b"installer")
+
+    release_signing.write_sha256sums([first, second], output)
+
+    assert output.read_bytes() == (
+        b"45447b7afbd5e544f7d0f1df0fccd26014d9850130abd3f020b89ff96b82079f  update.json\n"
+        b"9c0d294c05fc1d88d698034609bb81c0c69196327594e4c69d2915c80fd9850c  EcuReleaseTool_Setup_0.2.0.exe\n"
+    )

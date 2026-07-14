@@ -1,0 +1,147 @@
+name: Signed release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and audit release
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout tag and complete history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11.9'
+          cache: pip
+      - name: Gate tag, version, default branch history and clean inputs
+        shell: pwsh
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw "Noncanonical release tag: $env:GITHUB_REF_NAME"
+          }
+          $SourceVersion = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          if ($env:GITHUB_REF_NAME -ne "v$SourceVersion") { throw 'Tag and pyproject.toml version differ.' }
+          git fetch --no-tags origin "+refs/heads/$env:DEFAULT_BRANCH`:refs/remotes/origin/$env:DEFAULT_BRANCH"
+          git merge-base --is-ancestor $env:GITHUB_SHA "refs/remotes/origin/$env:DEFAULT_BRANCH"
+          if ($LASTEXITCODE -ne 0) { throw 'Tagged commit is not in the default branch history.' }
+          if (git status --porcelain) { throw 'Release checkout is not clean.' }
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r requirements-release.lock
+      - name: Bootstrap pinned release tools
+        shell: pwsh
+        run: pwsh.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/bootstrap_release_tools.ps1
+      - name: Scan current tree and complete history
+        shell: pwsh
+        run: |
+          & 'D:\software\gitleaks\8.30.1\gitleaks.exe' dir . --config=.gitleaks.toml --redact
+          & 'D:\software\gitleaks\8.30.1\gitleaks.exe' git . --log-opts="--all" --config=.gitleaks.toml --redact
+      - name: Run all tests
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH=(Resolve-Path 'src').Path
+          $env:QT_QPA_PLATFORM='offscreen'
+          python -m pytest -q
+      - name: Build and audit installer
+        shell: pwsh
+        run: >-
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass
+          -File ./scripts/build_windows_installer.ps1
+          -PythonPath (Get-Command python).Source
+          -IsccPath 'D:\software\InnoSetup\6.7.3\ISCC.exe'
+      - name: Require audited outputs
+        shell: pwsh
+        run: |
+          Get-Item .\dist\release-audit.json | Out-Null
+          Get-Item ".\dist\installer\EcuReleaseTool_Setup_$($env:GITHUB_REF_NAME.Substring(1)).exe" | Out-Null
+      - name: Upload unsigned audited release inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unsigned-audited-release
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            dist/release-audit.json
+            dist/installer/EcuReleaseTool_Setup_*.exe
+            THIRD_PARTY_NOTICES.txt
+
+  publish:
+    name: Sign and publish release
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+    env:
+      UPDATE_SIGNING_KEY_PEM: ${{ secrets.UPDATE_SIGNING_KEY_PEM }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout the exact tagged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11.9'
+          cache: pip
+      - name: Install locked signing dependencies
+        run: python -m pip install --require-hashes -r requirements-release.lock
+      - name: Download this run's audited build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-audited-release
+          path: release-input
+      - name: Verify signing key and generate signed release files
+        shell: pwsh
+        run: |
+          $Version = $env:GITHUB_REF_NAME.Substring(1)
+          $Installer = Resolve-Path ".\release-input\dist\installer\EcuReleaseTool_Setup_$Version.exe"
+          Get-FileHash -LiteralPath $Installer -Algorithm SHA256 | Format-List
+          python scripts/release_signing.py assert-key --public-keys src/unified_can_lin_host_tool/update/release_public_keys.json --key-id release-v1
+          $GeneratedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          python scripts/release_signing.py build-update --repository $env:GITHUB_REPOSITORY --version $Version --commit $env:GITHUB_SHA --generated-at $GeneratedAt --release-notes docs/releases/0.2.0.md --installer $Installer --key-id release-v1 --output release-input/update.json
+          python scripts/release_signing.py sign --input release-input/update.json --signature-output release-input/update.json.sig
+          python scripts/release_signing.py write-sha256sums --output release-input/SHA256SUMS.txt $Installer release-input/update.json release-input/update.json.sig release-input/THIRD_PARTY_NOTICES.txt release-input/dist/release-audit.json
+          if ((Get-Item release-input/update.json.sig).Length -ne 64) { throw 'Update signature must be 64 bytes.' }
+      - name: Create draft, verify uploaded assets, then publish
+        shell: pwsh
+        run: |
+          $Existing = gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" 2>&1
+          if ($LASTEXITCODE -eq 0) { throw "Release $env:GITHUB_REF_NAME already exists." }
+          if ($Existing -notmatch 'HTTP 404') { throw "Cannot prove release absence: $Existing" }
+          $Assets = @(
+            (Resolve-Path ".\release-input\dist\installer\EcuReleaseTool_Setup_$($env:GITHUB_REF_NAME.Substring(1)).exe").Path,
+            (Resolve-Path '.\release-input\update.json').Path,
+            (Resolve-Path '.\release-input\update.json.sig').Path,
+            (Resolve-Path '.\release-input\SHA256SUMS.txt').Path,
+            (Resolve-Path '.\release-input\THIRD_PARTY_NOTICES.txt').Path,
+            (Resolve-Path '.\release-input\dist\release-audit.json').Path
+          )
+          gh release create $env:GITHUB_REF_NAME @Assets --repo $env:GITHUB_REPOSITORY --draft --verify-tag --title "ECU Firmware Release Tool $($env:GITHUB_REF_NAME.Substring(1))" --notes-file docs/releases/0.2.0.md
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed.' }
+          $Release = gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" | ConvertFrom-Json
+          foreach ($Path in $Assets) {
+            $Local = Get-Item -LiteralPath $Path
+            $Remote = $Release.assets | Where-Object name -eq $Local.Name
+            $ExpectedDigest = 'sha256:' + (Get-FileHash -LiteralPath $Local.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($null -eq $Remote -or $Remote.size -ne $Local.Length -or $Remote.digest -ne $ExpectedDigest) {
+              throw "Uploaded asset digest or size mismatch: $($Local.Name); remote digest=$($Remote.digest)"
+            }
+          }
+          gh release edit $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --draft=false --latest

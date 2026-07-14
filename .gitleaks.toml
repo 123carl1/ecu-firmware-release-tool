@@ -1,0 +1,16 @@
+title = "ECU Firmware Release Tool secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "已公开且仅限开发台架的 DEVELOPMENT_PACKAGE_PRIVATE_SEED"
+paths = ['''^src/unified_can_lin_host_tool/release/development_keys\.py$''']
+regexTarget = "match"
+regexes = ['''4441555f41533550525f4552454c5f4445565f4b45595f323032365f30303031''']
+
+[[allowlists]]
+description = "已公开且仅限开发台架的 DEVELOPMENT_BOOT_HMAC_KEY"
+paths = ['''^src/unified_can_lin_host_tool/release/development_keys\.py$''']
+regexTarget = "match"
+regexes = ['''4441555f41533550525f4445565f484d41435f4b45595f323032365f30313031''']
